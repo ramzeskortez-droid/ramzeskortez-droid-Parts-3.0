@@ -23,7 +23,7 @@ export const ClientInterface: React.FC = () => {
   
   // Data state
   const [orders, setOrders] = useState<Order[]>([]);
-  const [activeTab, setActiveTab] = useState<'waiting' | 'processed' | 'archive'>('waiting');
+  const [activeTab, setActiveTab] = useState<'processed' | 'archive'>('processed');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   
   const [successToast, setSuccessToast] = useState<{message: string, id: string} | null>(null);
@@ -142,17 +142,14 @@ export const ClientInterface: React.FC = () => {
   };
 
   const counts = useMemo(() => {
-    const waiting = orders.filter(o => o.status === OrderStatus.OPEN && !o.readyToBuy && !o.offers?.some(off => off.visibleToClient === 'Y')).length;
-    const processed = orders.filter(o => o.status === OrderStatus.OPEN && !o.readyToBuy && o.offers?.some(off => off.visibleToClient === 'Y')).length;
+    const processed = orders.filter(o => o.status === OrderStatus.OPEN && !o.readyToBuy).length;
     const archive = orders.filter(o => o.status === OrderStatus.CLOSED || o.readyToBuy).length;
-    return { waiting, processed, archive };
+    return { processed, archive };
   }, [orders]);
 
   const filteredOrders = useMemo(() => orders.filter(o => {
-    const hasVisibleOffers = o.offers?.some(off => off.visibleToClient === 'Y');
     if (activeTab === 'archive') return o.status === OrderStatus.CLOSED || o.readyToBuy;
-    if (activeTab === 'waiting') return o.status === OrderStatus.OPEN && !o.readyToBuy && !hasVisibleOffers;
-    return o.status === OrderStatus.OPEN && hasVisibleOffers && !o.readyToBuy;
+    return o.status === OrderStatus.OPEN && !o.readyToBuy;
   }), [orders, activeTab]);
 
   const paginatedOrders = useMemo(() => {
@@ -317,11 +314,8 @@ export const ClientInterface: React.FC = () => {
       {/* TABS SECTION */}
       <div className="space-y-2">
         <div className="flex gap-2 border-b border-slate-200 pb-1">
-          <button onClick={() => setActiveTab('waiting')} className={`px-2 py-1 text-[10px] font-black uppercase transition-all ${activeTab === 'waiting' ? 'text-slate-900 border-b-2 border-slate-900' : 'text-slate-400'}`}>
-            В ожидании {counts.waiting > 0 && <span className="ml-1 opacity-60">({counts.waiting})</span>}
-          </button>
-          <button onClick={() => setActiveTab('processed')} className={`px-2 py-1 text-[10px] font-black uppercase transition-all ${activeTab === 'processed' ? 'text-emerald-700 border-b-2 border-emerald-600' : 'text-slate-400'}`}>
-            В обработке {counts.processed > 0 && <span className="ml-1 bg-emerald-100 text-emerald-700 px-1 rounded-sm">({counts.processed})</span>}
+          <button onClick={() => setActiveTab('processed')} className={`px-2 py-1 text-[10px] font-black uppercase transition-all ${activeTab === 'processed' ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-slate-400'}`}>
+            В обработке {counts.processed > 0 && <span className="ml-1 bg-indigo-50 text-indigo-700 px-1.5 rounded-sm">({counts.processed})</span>}
           </button>
           <button onClick={() => setActiveTab('archive')} className={`px-2 py-1 text-[10px] font-black uppercase transition-all ${activeTab === 'archive' ? 'text-slate-900 border-b-2 border-slate-900' : 'text-slate-400'}`}>
             Архив {counts.archive > 0 && <span className="ml-1 opacity-40">({counts.archive})</span>}
@@ -362,7 +356,7 @@ export const ClientInterface: React.FC = () => {
                         {order.readyToBuy ? (
                             <span className="px-3 py-1 rounded-full font-black text-[9px] uppercase bg-emerald-600 text-white whitespace-nowrap shadow-sm">КУПЛЕНО</span>
                         ) : (
-                            visibleOffers.length > 0 && <span className={`px-3 py-1 rounded-full font-bold text-[9px] uppercase whitespace-nowrap shadow-sm ${hasWinning ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>{hasWinning ? 'ГОТОВО' : 'В ОБРАБОТКЕ'}</span>
+                            <span className={`px-3 py-1 rounded-full font-bold text-[9px] uppercase whitespace-nowrap shadow-sm ${hasWinning ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>{hasWinning ? 'ГОТОВО' : 'В ОБРАБОТКЕ'}</span>
                         )}
                         <MoreHorizontal size={14} className="text-slate-300" />
                     </div>
