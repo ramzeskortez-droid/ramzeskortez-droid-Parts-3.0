@@ -56,7 +56,6 @@ export const SellerInterface: React.FC = () => {
     setAppliedSearch(searchQuery.toLowerCase().trim());
   };
 
-  // Строгое получение оффера ТЕКУЩЕГО поставщика
   const getMyOffer = (order: Order) => {
     if (!sellerName) return null;
     const nameToMatch = sellerName.trim().toUpperCase();
@@ -90,27 +89,40 @@ export const SellerInterface: React.FC = () => {
     }
   };
 
-  const parseRuDate = (dateStr: any) => {
-    if (!dateStr || typeof dateStr !== 'string') return new Date(0);
-    try {
-      const cleanStr = dateStr.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
-      const datePart = cleanStr.split(/[\s,]/)[0];
-      const parts = datePart.split(/[\.\-\/]/);
-      if (parts.length === 3) {
-          let d, m, y;
-          if (parts[0].length === 4) { [y, m, d] = parts.map(Number); }
-          else { [d, m, y] = parts.map(Number); }
-          const dateObj = new Date(y, m - 1, d);
-          return dateObj;
-      }
-      return new Date(dateStr);
-    } catch (e) { return new Date(0); }
+  /**
+   * Робастный парсер даты. Поддерживает форматы:
+   * - 23.12.2025
+   * - 2025-12-23
+   * - Строки с переносами из Google Sheets
+   */
+  const parseRuDate = (dateStr: any): Date => {
+    if (!dateStr) return new Date(0);
+    if (dateStr instanceof Date) return dateStr;
+    
+    // Исправлено: замена некорректного регулярного выражения \n/r/g на корректное /[\n\r]/g
+    const s = String(dateStr).trim().replace(/[\n\r]/g, ' ');
+    
+    // 1. Попытка нативного парсинга
+    const nativeDate = new Date(s);
+    if (!isNaN(nativeDate.getTime())) return nativeDate;
+
+    // 2. Поиск формата DD.MM.YYYY через RegExp
+    const match = s.match(/(\d{2})\.(\d{2})\.(\d{4})/);
+    if (match) {
+      return new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]));
+    }
+
+    return new Date(0);
   };
 
   const marketStats = useMemo(() => {
     const allOrders = rawOrders.filter(o => o.type === RowType.ORDER);
     const now = new Date();
+    
+    // Точные границы времени
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
+    
     const startOfWeek = startOfToday - (7 * 24 * 60 * 60 * 1000);
     const startOfMonth = startOfToday - (30 * 24 * 60 * 60 * 1000);
 
@@ -119,9 +131,11 @@ export const SellerInterface: React.FC = () => {
 
     allOrders.forEach(o => {
       const d = parseRuDate(o.createdAt).getTime();
-      if (d >= startOfToday) today++;
-      if (d >= startOfWeek) week++;
-      if (d >= startOfMonth) month++;
+      
+      // Логика: дата должна быть внутри диапазона и НЕ в будущем относительно текущего конца дня
+      if (d >= startOfToday && d <= endOfToday) today++;
+      if (d >= startOfWeek && d <= endOfToday) week++;
+      if (d >= startOfMonth && d <= endOfToday) month++;
       
       const brand = o.car?.model?.split(' ')[0]?.toUpperCase();
       if (brand && brand.length > 2) brandCounts[brand] = (brandCounts[brand] || 0) + 1;
@@ -237,7 +251,6 @@ export const SellerInterface: React.FC = () => {
         </div>
       )}
 
-      {/* DASHBOARD HEADER */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
          <div className="flex flex-col">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">MARKET DASHBOARD</span>
@@ -256,7 +269,6 @@ export const SellerInterface: React.FC = () => {
          </div>
       </div>
 
-      {/* STATS */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatCard icon={<Clock size={16} className="text-indigo-600"/>} label="СЕГОДНЯ" value={marketStats.today} subLabel="ОРДЕРОВ" loading={loading} />
           <StatCard icon={<Calendar size={16} className="text-indigo-600"/>} label="НЕДЕЛЯ" value={marketStats.week} subLabel="ОРДЕРОВ" loading={loading} />
@@ -272,7 +284,6 @@ export const SellerInterface: React.FC = () => {
           </div>
       </div>
 
-      {/* SEARCH & FILTERS */}
       <div className="space-y-4">
          <div className="relative group flex items-center">
             <Search className="absolute left-6 text-slate-400" size={20}/>
@@ -287,7 +298,6 @@ export const SellerInterface: React.FC = () => {
          </div>
       </div>
 
-      {/* TAB NAVIGATION */}
       <div className="flex justify-between items-end border-b border-slate-200">
          <div className="flex gap-4">
             <button onClick={() => setActiveTab('new')} className={`pb-2 text-[11px] font-black uppercase transition-all relative ${activeTab === 'new' ? 'text-slate-900' : 'text-slate-400'}`}>Новые <span className="ml-1 bg-slate-900 text-white px-1.5 py-0.5 rounded text-[9px]">{rawOrders.filter(o => !hasSentOfferByMe(o) && o.status === OrderStatus.OPEN && !o.isProcessed).length}</span>{activeTab === 'new' && <span className="absolute bottom-[-2px] left-0 right-0 h-1 bg-slate-900 rounded-full"></span>}</button>
@@ -296,7 +306,6 @@ export const SellerInterface: React.FC = () => {
          <button onClick={() => fetchData(false)} className="mb-2 p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-all flex items-center gap-2"><RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''}/></button>
       </div>
 
-      {/* ORDER LIST */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         {filteredOrders.length === 0 && <div className="p-12 text-center text-[10px] font-black text-slate-300 uppercase italic tracking-widest">Список пуст</div>}
         {paginatedOrders.map(order => {
@@ -327,8 +336,6 @@ export const SellerInterface: React.FC = () => {
                   <div className="space-y-3">
                       {order.items.map(item => {
                         const stateKey = `${order.id}-${item.name}`;
-                        
-                        // Если оффер уже отправлен ТЕКУЩИМ пользователем, берем данные из него
                         const offerItem = myOffer?.items.find(i => i.name === item.name);
                         const state = editingItems[stateKey] || { 
                           price: offerItem?.sellerPrice || 0, 
