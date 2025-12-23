@@ -28,7 +28,7 @@ function doGet(e) {
       createdAt: r[9], location: r[10], processed: r[11], readyToBuy: r[12]
     })));
   }
-  return response({status: "alive", version: "4.0.0-full-notifications"});
+  return response({status: "alive", version: "4.0.2-purchase-notifications"});
 }
 
 /**
@@ -81,7 +81,6 @@ function doPost(e) {
       sheet.insertRowAfter(insertionIndex);
       sheet.getRange(insertionIndex + 1, 1, 1, rowData.length).setValues([rowData]);
       
-      // Считаем количество офферов для уведомления
       const offerNum = countOffersForOrder(sheet, o.parentId);
       const subSheet = doc.getSheetByName('Subscribers');
       broadcastMessage(`💰 <b>НОВОЕ ПРЕДЛОЖЕНИЕ (№${offerNum})</b>\nК заказу: <code>${o.parentId}</code>\nПоставщик: <b>${o.clientName}</b>`, subSheet);
@@ -94,12 +93,16 @@ function doPost(e) {
     }
     else if (body.action === 'confirm_purchase') {
       handlePurchaseConfirmation(sheet, body.orderId);
+      const orderRow = findOrderRowById(sheet, body.orderId);
+      if (orderRow) {
+        const subSheet = doc.getSheetByName('Subscribers');
+        broadcastMessage(formatPurchaseConfirmationMessage(body.orderId, orderRow), subSheet);
+      }
     }
     else if (body.action === 'close_order') {
       closeOrderInSheet(sheet, body.orderId);
     }
     else if (body.action === 'update_rank') {
-      // При обновлении ранга мы вызываем функцию из 1.5.7/1.5.8 для пересчета "Детали/Цены"
       handleRankUpdate(sheet, body);
     }
 
@@ -113,47 +116,90 @@ function doPost(e) {
 }
 
 /**
- * ФОРМАТ КП ДЛЯ ТЕЛЕГРАМА (С ПОЗИЦИЯМИ И ЦЕНАМИ)
+ * ФОРМАТ КП ДЛЯ ТЕЛЕГРАМА (РАСШИРЕННЫЙ)
  */
 function formatCPMessage(orderId, row) {
-  let msg = `✅ <b>КП СФОРМИРОВАНО</b>\n`;
-  msg += `Заказ: <code>${orderId}</code>\n\n`;
-  msg += `📋 <b>ПОЗИЦИИ:</b>\n`;
-  
-  // Берем данные из колонки "Детали/Цены" (индекс 8)
   const details = String(row[8] || '');
   const lines = details.split('\n');
   
-  // Пропускаем первую строку (инфо об авто) и выводим только выбранные (с галочкой)
+  let msg = `✅ <b>КП СФОРМИРОВАНО</b>\n`;
+  msg += `Заказ: <code>${orderId}</code>\n`;
+  msg += `Имя клиента: <b>${row[5]}</b>\n`;
+  msg += `<b>${lines[0]}</b>\n\n`;
+  
+  msg += `📋 <b>ПОЗИЦИИ:</b>\n`;
+  
   lines.forEach((line, idx) => {
-    if (idx === 0) return; // Пропуск заголовка авто
+    if (idx === 0) return; 
     if (line.includes('✅')) {
-      // Преобразуем формат "✅ | Название | 1шт | 500₽" в "• Название — 500₽ x 1 шт"
       const parts = line.split('|').map(p => p.trim());
       if (parts.length >= 4) {
-        msg += `• ${parts[1]} — <b>${parts[3]}</b> x ${parts[2]}\n`;
-      } else {
-        msg += `• ${line.replace('✅ | ', '')}\n`;
+        msg += `• ${parts[1]} — ${parts[3]} x ${parts[2]}\n`;
       }
     }
   });
 
-  msg += `\n🌍 <a href="${WEBAPP_URL}">Открыть Маркетплейс</a>`;
   return msg;
 }
 
 /**
- * СЧЕТЧИК ПРЕДЛОЖЕНИЙ
+ * ФОРМАТ ПОДТВЕРЖДЕНИЯ ПОКУПКИ (С РАСЧЕТОМ ИТОГО)
  */
-function countOffersForOrder(sheet, parentId) {
-  const data = sheet.getDataRange().getValues();
-  let count = 0;
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][1]) === String(parentId) && data[i][2] === 'OFFER') {
-      count++;
+function formatPurchaseConfirmationMessage(orderId, row) {
+  const details = String(row[8] || '');
+  const lines = details.split('\n');
+  
+  let msg = `🛍 <b>КЛИЕНТ ГОТОВ КУПИТЬ</b>\n`;
+  msg += `Заказ: <code>${orderId}</code>\n`;
+  msg += `Клиент: <b>${row[5]}</b>\n`;
+  msg += `Авто: <b>${lines[0]}</b>\n\n`;
+  
+  msg += `📋 <b>ПОЗИЦИИ:</b>\n`;
+  let total = 0;
+  
+  lines.forEach((line, idx) => {
+    if (idx === 0) return; 
+    if (line.includes('✅')) {
+      const parts = line.split('|').map(p => p.trim());
+      if (parts.length >= 4) {
+        msg += `• ${parts[1]} — ${parts[3]} x ${parts[2]}\n`;
+        
+        // Парсим цену и количество для ИТОГО
+        const priceNum = parseInt(parts[3].replace(/\D/g, '')) || 0;
+        const qtyNum = parseInt(parts[2].replace(/\D/g, '')) || 1;
+        total += priceNum * qtyNum;
+      }
     }
+  });
+
+  msg += `\n<b>ИТОГО: ${total.toLocaleString('ru-RU')} руб.</b>`;
+  return msg;
+}
+
+/**
+ * ФОРМАТ НОВОГО ЗАКАЗА
+ */
+function formatNewOrderMessage(order, b24Result) {
+  let msg = `🔥 <b>НОВЫЙ ЗАКАЗ</b>\n`;
+  msg += `ID: <code>${order.id}</code>\n`;
+  msg += `Клиент: <b>${order.clientName}</b>\n`;
+  msg += `VIN: <code>${order.vin}</code>\n\n`;
+  
+  msg += `📋 <b>ПОЗИЦИИ:</b>\n`;
+  if (order.items) {
+    order.items.forEach(i => msg += `• ${i.name} — ${i.quantity} шт\n`);
   }
-  return count;
+  msg += `\n`;
+  
+  if (b24Result && b24Result.id) {
+    msg += `🚀 <a href="${B24_BASE_URL}/crm/lead/details/${b24Result.id}/">${b24Result.title}</a>`;
+  } else if (b24Result && b24Result.error) {
+    msg += `⚠️ <b>ОШИБКА CRM:</b> <i>${b24Result.error}</i>`;
+  } else {
+    msg += `⚠️ <i>Лид в CRM не создан</i>`;
+  }
+  
+  return msg;
 }
 
 /**
@@ -164,14 +210,15 @@ function addLeadWithTg(order) {
   if (order.items && order.items.length > 0 && order.items[0].car) { 
     carModel = order.items[0].car.model || "Модель?"; 
   }
-  var rawTitle = carModel + " | " + (order.clientName || "Клиент") + " | " + (order.vin || "Без VIN");
-  var leadTitle = encodeURIComponent(rawTitle);
+  var leadTitleText = carModel + " | " + (order.clientName || "Клиент");
+  var rawTitle = leadTitleText + " | " + (order.vin || "Без VIN");
+  var leadTitleEnc = encodeURIComponent(rawTitle);
   var clientName = encodeURIComponent(order.clientName || "Неизвестный");
   var comments = encodeURIComponent("Заказ: " + order.id + "\nVIN: " + (order.vin || "-") + "\nЛокация: " + (order.location || "-"));
 
   var options = { "method": "get", "validateHttpsCertificates": false, "muteHttpExceptions": true };
   try {
-    var leadUrl = B24_WEBHOOK_URL + "crm.lead.add?fields[TITLE]=" + leadTitle + "&fields[NAME]=" + clientName + "&fields[COMMENTS]=" + comments + "&fields[STATUS_ID]=NEW&fields[OPENED]=Y"; 
+    var leadUrl = B24_WEBHOOK_URL + "crm.lead.add?fields[TITLE]=" + leadTitleEnc + "&fields[NAME]=" + clientName + "&fields[COMMENTS]=" + comments + "&fields[STATUS_ID]=NEW&fields[OPENED]=Y"; 
     var leadResponse = UrlFetchApp.fetch(leadUrl, options);
     var leadJson = JSON.parse(leadResponse.getContentText());
     if (!leadJson.result) return { error: leadJson.error_description || "Ошибка Б24" };
@@ -185,17 +232,17 @@ function addLeadWithTg(order) {
       }
       UrlFetchApp.fetch(B24_WEBHOOK_URL + "crm.lead.productrows.set" + productParams, options);
     }
-    return { id: newLeadId }; 
+    return { id: newLeadId, title: leadTitleText }; 
   } catch (e) { return { error: e.toString() }; }
 }
 
-function formatNewOrderMessage(order, b24Result) {
-  let msg = `🔥 <b>НОВЫЙ ЗАКАЗ</b>\nID: <code>${order.id}</code>\nКлиент: <b>${order.clientName}</b>\nVIN: <code>${order.vin}</code>\n\n📋 <b>ПОЗИЦИИ:</b>\n`;
-  if (order.items) order.items.forEach(i => msg += `• ${i.name} — ${i.quantity} шт\n`);
-  msg += `\n`;
-  if (b24Result && b24Result.id) msg += `🚀 <a href="${B24_BASE_URL}/crm/lead/details/${b24Result.id}/">Лид в Bitrix24</a>`;
-  else msg += `⚠️ <i>Лид в CRM не создан</i>`;
-  return msg;
+function countOffersForOrder(sheet, parentId) {
+  const data = sheet.getDataRange().getValues();
+  let count = 0;
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][1]) === String(parentId) && data[i][2] === 'OFFER') count++;
+  }
+  return count;
 }
 
 function handleRankUpdate(sheet, body) {
