@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { SheetService } from '../services/sheetService';
 import { Order, OrderStatus, Currency, RowType } from '../types';
@@ -32,9 +33,16 @@ export const SellerInterface: React.FC = () => {
 
   const fetchData = async (silent = false) => {
     if (!sellerName) return;
-    if (!silent) setLoading(true);
+    
+    // Если это принудительное обновление, очищаем текущий список для визуального отклика
+    if (!silent) {
+        setLoading(true);
+        setRawOrders([]); 
+    }
+    
     setIsSyncing(true);
     try {
+      // ПРИНУДИТЕЛЬНО вызываем getOrders(true) для обхода кэша
       const data = await SheetService.getOrders(true);
       setRawOrders(data);
     } catch (e) { console.error(e); }
@@ -62,9 +70,6 @@ export const SellerInterface: React.FC = () => {
     ) || false;
   };
 
-  /**
-   * ROBUST DATE PARSER
-   */
   const parseRuDate = (dateStr: any) => {
     if (!dateStr || typeof dateStr !== 'string') return new Date(0);
     try {
@@ -185,10 +190,17 @@ export const SellerInterface: React.FC = () => {
     e.preventDefault();
     if (!tempToken.trim()) return;
     const name = tempToken.trim().toUpperCase();
+    
+    // Сбрасываем текущие данные перед авторизацией
+    setOptimisticSentIds(new Set());
+    setRawOrders([]);
+    
     setSellerName(name);
     localStorage.setItem('seller_token', name);
     setShowTokenModal(false);
-    fetchData();
+    
+    // Принудительная загрузка
+    fetchData(false);
   };
 
   return (
@@ -310,7 +322,7 @@ export const SellerInterface: React.FC = () => {
             <button onClick={() => setActiveTab('new')} className={`pb-2 text-[11px] font-black uppercase transition-all relative ${activeTab === 'new' ? 'text-slate-900' : 'text-slate-400'}`}>Новые запросы <span className="ml-1 bg-slate-900 text-white px-1.5 py-0.5 rounded text-[9px]">{rawOrders.filter(o => !hasSentOfferByMe(o) && o.status === OrderStatus.OPEN && !o.isProcessed).length}</span>{activeTab === 'new' && <span className="absolute bottom-[-2px] left-0 right-0 h-1 bg-slate-900 rounded-full"></span>}</button>
             <button onClick={() => setActiveTab('processed')} className={`pb-2 text-[11px] font-black uppercase transition-all relative ${activeTab === 'processed' ? 'text-indigo-600' : 'text-slate-400'}`}>Отправленные <span className="ml-1 bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded text-[9px]">{rawOrders.filter(o => hasSentOfferByMe(o)).length}</span>{activeTab === 'processed' && <span className="absolute bottom-[-2px] left-0 right-0 h-1 bg-indigo-600 rounded-full"></span>}</button>
          </div>
-         <button onClick={() => fetchData()} className="mb-2 p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-all flex items-center gap-2"><span className="text-[9px] font-black uppercase hidden sm:inline">Обновить</span><RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''}/></button>
+         <button onClick={() => fetchData(false)} className="mb-2 p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-all flex items-center gap-2"><span className="text-[9px] font-black uppercase hidden sm:inline">Обновить</span><RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''}/></button>
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -342,7 +354,6 @@ export const SellerInterface: React.FC = () => {
                         const state = editingItems[stateKey] || { price: 0, currency: 'RUB', offeredQty: item.quantity, refImage: '' };
                         const isDisabled = isSent;
                         
-                        // Валидация состояния
                         const isPriceMissing = state.price === 0;
                         const isQtyPartial = state.offeredQty < item.quantity;
                         const hasErrors = !isDisabled && (isPriceMissing || isQtyPartial);
@@ -351,12 +362,10 @@ export const SellerInterface: React.FC = () => {
                             const digits = raw.replace(/\D/g, '');
                             if (digits === '' && raw !== '') return;
                             let val = parseInt(digits) || 0;
-                            // СТРОГАЯ ВАЛИДАЦИЯ ЦЕНЫ
                             if (field === 'price' && val > 1000000) val = 1000000;
                             if (max && val > max) val = max;
                             
                             setEditingItems(prev => {
-                                // ИСПРАВЛЕНИЕ: Подхватываем item.quantity при инициализации, чтобы не сбрасывать в 0
                                 const existing = prev[stateKey] || { price: 0, currency: 'RUB' as Currency, offeredQty: item.quantity, refImage: '' };
                                 return {
                                     ...prev,
@@ -367,7 +376,6 @@ export const SellerInterface: React.FC = () => {
 
                         return (
                           <div key={item.name} className={`flex flex-col md:flex-row gap-4 items-center border rounded-xl p-3 transition-all ${hasErrors ? 'border-red-200 bg-red-50/30 ring-1 ring-red-100' : 'border-slate-100 bg-slate-50/30'}`}>
-                             {/* ЛЕВАЯ ЧАСТЬ: Название и Теги */}
                              <div className="flex-grow w-full">
                                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                                     <h4 className="font-black text-[11px] uppercase text-slate-900 whitespace-nowrap">{item.name}</h4>
@@ -382,7 +390,6 @@ export const SellerInterface: React.FC = () => {
                                 </div>
                              </div>
 
-                             {/* ПРАВАЯ ЧАСТЬ: Компактные инпуты */}
                              <div className="flex flex-wrap md:flex-nowrap items-end gap-2 shrink-0">
                                 <div className="w-16 space-y-1">
                                     <label className="text-[7px] font-bold text-slate-400 uppercase block text-center">Кол-во</label>
