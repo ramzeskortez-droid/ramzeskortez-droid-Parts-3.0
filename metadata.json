@@ -1,0 +1,5 @@
+{
+  "name": "AutoParts Marketplace3",
+  "description": "Интерфейс для заказа автозапчастей с коммуникацией между клиентом и продавцом.",
+  "requestFramePermissions": []
+}
