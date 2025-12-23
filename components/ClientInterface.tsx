@@ -229,7 +229,7 @@ export const ClientInterface: React.FC = () => {
             В ожидании {counts.waiting > 0 && <span className="ml-1 opacity-60">({counts.waiting})</span>}
           </button>
           <button onClick={() => setActiveTab('processed')} className={`px-2 py-1 text-[10px] font-black uppercase transition-all ${activeTab === 'processed' ? 'text-emerald-700 border-b-2 border-emerald-600' : 'text-slate-400'}`}>
-            Предложения {counts.processed > 0 && <span className="ml-1 bg-emerald-100 text-emerald-700 px-1 rounded-sm">({counts.processed})</span>}
+            В обработке {counts.processed > 0 && <span className="ml-1 bg-emerald-100 text-emerald-700 px-1 rounded-sm">({counts.processed})</span>}
           </button>
           <button onClick={() => setActiveTab('archive')} className={`px-2 py-1 text-[10px] font-black uppercase transition-all ${activeTab === 'archive' ? 'text-slate-900 border-b-2 border-slate-900' : 'text-slate-400'}`}>
             Архив {counts.archive > 0 && <span className="ml-1 opacity-40">({counts.archive})</span>}
@@ -260,7 +260,7 @@ export const ClientInterface: React.FC = () => {
 
             return (
               <div key={order.id} className={`transition-all duration-500 border-l-4 ${containerStyle}`}>
-                 <div className="p-3 grid grid-cols-[120px_1fr_80px] items-center gap-4 cursor-pointer min-h-[56px]" onClick={() => !isVanishing && setExpandedId(isExpanded ? null : order.id)}>
+                 <div className="p-3 grid grid-cols-[100px_1fr_120px] items-center gap-4 cursor-pointer min-h-[56px]" onClick={() => !isVanishing && setExpandedId(isExpanded ? null : order.id)}>
                     <div className="flex flex-col justify-center min-w-0">
                        <span className="font-mono font-bold text-[10px] text-slate-900 truncate block">{order.id}</span>
                        <span className="text-[8px] font-bold text-slate-400 uppercase leading-none tracking-tight truncate block">{order.vin}</span>
@@ -273,9 +273,9 @@ export const ClientInterface: React.FC = () => {
                     </div>
                     <div className="flex items-center justify-end gap-3">
                         {order.readyToBuy ? (
-                            <span className="px-2 py-0.5 rounded-full font-black text-[8px] uppercase bg-emerald-600 text-white">КУПЛЕНО</span>
+                            <span className="px-3 py-1 rounded-full font-black text-[9px] uppercase bg-emerald-600 text-white whitespace-nowrap shadow-sm">КУПЛЕНО</span>
                         ) : (
-                            visibleOffers.length > 0 && <span className={`px-2 py-0.5 rounded-full font-bold text-[8px] uppercase ${hasWinning ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{hasWinning ? 'ГОТОВО' : 'ПРЕДЛОЖЕНИЕ'}</span>
+                            visibleOffers.length > 0 && <span className={`px-3 py-1 rounded-full font-bold text-[9px] uppercase whitespace-nowrap shadow-sm ${hasWinning ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>{hasWinning ? 'ГОТОВО' : 'В ОБРАБОТКЕ'}</span>
                         )}
                         <MoreHorizontal size={14} className="text-slate-300" />
                     </div>
