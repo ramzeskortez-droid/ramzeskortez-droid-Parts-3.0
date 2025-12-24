@@ -28,7 +28,7 @@ function doGet(e) {
       createdAt: r[9], location: r[10], processed: r[11], readyToBuy: r[12], refusal: r[13]
     })));
   }
-  return response({status: "alive", version: "4.6.0-fix-annul"});
+  return response({status: "alive", version: "4.8.0-fixed-links"});
 }
 
 /**
@@ -55,11 +55,23 @@ function doPost(e) {
     ]);
     const body = contents;
 
+    // --- CREATE ORDER ---
     if (body.action === 'create' && body.order.type === 'ORDER') {
       const o = body.order;
+      
+      // 1. Сначала создаем Лид в CRM, чтобы получить ID
+      var b24Result = addLeadWithTg(o);
+      
+      // 2. Сохраняем ID лида в JSON (в первый элемент items), чтобы потом формировать ссылки
+      if (b24Result && b24Result.id && o.items.length > 0) {
+        o.items[0].bitrixId = b24Result.id;
+      }
+
       const itemsJson = JSON.stringify(o.items);
       const summary = (o.items || []).map(i => `${i.name} (${i.quantity} шт)`).join(', ');
       const formattedDate = (o.createdAt || '').replace(', ', '\n');
+      
+      // Task 21: Summary Logic
       const readableStatus = generateOrderSummary(o.items);
 
       const rowData = [
@@ -69,10 +81,10 @@ function doPost(e) {
       sheet.insertRowAfter(1);
       sheet.getRange(2, 1, 1, rowData.length).setValues([rowData]);
       
-      var b24Result = addLeadWithTg(o);
       const subSheet = doc.getSheetByName('Subscribers');
       broadcastMessage(formatNewOrderMessage(o, b24Result), subSheet);
     } 
+    // --- CREATE OFFER ---
     else if (body.action === 'create' && body.order.type === 'OFFER') {
       const o = body.order;
       const itemsJson = JSON.stringify(o.items);
@@ -83,26 +95,33 @@ function doPost(e) {
       
       const offerNum = countOffersForOrder(sheet, o.parentId);
       const subSheet = doc.getSheetByName('Subscribers');
-      broadcastMessage(`💰 <b>НОВОЕ ПРЕДЛОЖЕНИЕ (№${offerNum})</b>\nК заказу: <code>${o.parentId}</code>\nПоставщик: <b>${o.clientName}</b>`, subSheet);
+      
+      // Task 22: Enriched Offer Notification
+      const parentRow = findOrderRowById(sheet, o.parentId);
+      const msg = formatNewOfferMessage(o, offerNum, parentRow);
+      broadcastMessage(msg, subSheet);
     }
+    // --- FORM CP ---
     else if (body.action === 'form_cp') {
       updateStatusById(sheet, body.orderId, 12, 'Y'); 
       const orderRow = findOrderRowById(sheet, body.orderId);
       const subSheet = doc.getSheetByName('Subscribers');
+      
+      // Task 23: Enriched CP Notification
       broadcastMessage(orderRow ? formatCPMessage(body.orderId, orderRow) : `✅ <b>КП СФОРМИРОВАНО</b>\nЗаказ: <code>${body.orderId}</code>`, subSheet);
     }
+    // --- CONFIRM PURCHASE ---
     else if (body.action === 'confirm_purchase') {
       updateStatusById(sheet, body.orderId, 13, 'Y');
       const orderRow = findOrderRowById(sheet, body.orderId);
       if (orderRow) {
         const subSheet = doc.getSheetByName('Subscribers');
+        // Task 24: Enriched Purchase Notification
         broadcastMessage(formatPurchaseConfirmationMessage(body.orderId, orderRow), subSheet);
       }
     }
     else if (body.action === 'refuse_order') {
-       // ОТКАЗ: Ставим галочку в 14-й колонке (N)
        updateStatusById(sheet, body.orderId, 14, 'Y'); 
-       // ЗАКРЫТ: Ставим статус в 4-й колонке (D)
        updateStatusById(sheet, body.orderId, 4, 'ЗАКРЫТ');
        
        const orderRow = findOrderRowById(sheet, body.orderId);
@@ -114,6 +133,17 @@ function doPost(e) {
        }
     }
     else if (body.action === 'update_json') {
+       // Preserve bitrixId if it exists in the old JSON
+       const oldRow = findOrderRowById(sheet, body.orderId);
+       let oldItems = [];
+       try { oldItems = JSON.parse(oldRow[7]); } catch(e){}
+       
+       if (oldItems.length > 0 && oldItems[0].bitrixId) {
+           if (body.items.length > 0) {
+               body.items[0].bitrixId = oldItems[0].bitrixId;
+           }
+       }
+
        const newJson = JSON.stringify(body.items);
        updateStatusById(sheet, body.orderId, 8, newJson);
        
@@ -143,6 +173,18 @@ function doPost(e) {
   }
 }
 
+// --- HELPER FUNCTIONS ---
+
+function getCarHeader(car) {
+    if (!car) return "{Авто не указано}";
+    const brand = car.brand || "";
+    const model = car.AdminModel || car.model || "";
+    const year = car.AdminYear || car.year || "";
+    // Clean format without braces, separated by pipes
+    return [brand, model, year].filter(Boolean).join(' | ');
+}
+
+// Task 21: Updated Summary Logic
 function recalculateSummaryOrReceipt(sheet, orderId, orderItems) {
     const data = sheet.getDataRange().getValues();
     const allLeaderItems = [];
@@ -167,11 +209,14 @@ function recalculateSummaryOrReceipt(sheet, orderId, orderItems) {
         }
     }
 
+    let carInfo = null;
+    if (orderItems.length > 0) carInfo = orderItems[0].car;
+
     if (allLeaderItems.length > 0) {
-        let carInfo = null;
-        if (orderItems.length > 0) carInfo = orderItems[0].car;
+        // Writes to Col I (Index 8)
         sheet.getRange(orderRowIndex + 1, 9).setValue(generateFinalOrderReceipt(carInfo, allLeaderItems));
     } else {
+        // Writes to Col I (Index 8)
         sheet.getRange(orderRowIndex + 1, 9).setValue(generateOrderSummary(orderItems));
     }
 }
@@ -298,13 +343,16 @@ function formatRefusalMessage(orderId, row, allOffers) {
   const clientName = row[5];
   let carStr = "Не указано";
   let itemsList = "";
+  let b24Id = null;
+
   try {
       const json = JSON.parse(row[7]);
       const car = json[0]?.car;
+      b24Id = json[0]?.bitrixId;
       if (car) {
           const model = car.AdminModel || car.model || '';
           const year = car.AdminYear || car.year || '';
-          carStr = `${model} ${year}`.trim();
+          carStr = [model, year].filter(Boolean).join(' | ');
       }
       if (json && json.length > 0) {
           json.forEach(item => {
@@ -334,7 +382,13 @@ function formatRefusalMessage(orderId, row, allOffers) {
   if (itemsList) {
       msg += `\n📋 <b>ПОЗИЦИИ:</b>\n${itemsList}`;
   }
-  msg += `\n🔗 <a href="${B24_BASE_URL}/crm/lead/list/">Открыть список лидов CRM</a>`;
+  
+  const leadTitle = `${carStr} | ${clientName}`;
+  if (b24Id) {
+    msg += `\n🔗 <a href="${B24_BASE_URL}/crm/lead/details/${b24Id}/">${leadTitle}</a>`;
+  } else {
+    msg += `\n🔗 <a href="${B24_BASE_URL}/crm/lead/list/">Открыть список лидов CRM</a>`;
+  }
   return msg;
 }
 
@@ -352,80 +406,179 @@ function getAllOffersForOrder(sheet, orderId) {
     return offers;
 }
 
+// Task 23: TG CP Formed (Updated)
 function formatCPMessage(orderId, row) {
-  const details = String(row[8] || '');
-  const lines = details.split('\n');
+  let carStr = "Авто не указано";
+  let bitrixId = null;
+  let itemsHtml = "";
+  let clientName = row[5];
   
-  let msg = `✅ <b>КП СФОРМИРОВАНО</b>\n`;
-  msg += `Заказ: <code>${orderId}</code>\n`;
-  msg += `Имя клиента: <b>${row[5]}</b>\n`;
-  
-  // Безопасное чтение авто (строка 0)
-  const carLine = lines.length > 0 ? lines[0] : "Авто не указано";
-  msg += `<b>${carLine}</b>\n\n`;
-  
-  msg += `📋 <b>ПОЗИЦИИ:</b>\n`;
-  
-  // Добавлена защита от пустых строк и некорректного формата
-  let hasItems = false;
-  lines.forEach((line, idx) => {
-    if (idx === 0) return; 
-    if (line.includes('✅')) {
-      const parts = line.split('|').map(p => p.trim());
-      // Ожидаем: [0]✅, [1]Name, [2]Qty, [3]Price
-      if (parts.length >= 3) { // Хотя бы имя и кол-во
-        const name = parts[1] || 'Деталь';
-        const price = parts[3] || 'Цена не указана';
-        const qty = parts[2] || '1 шт';
-        msg += `• ${name} — ${price} x ${qty}\n`;
-        hasItems = true;
-      }
-    }
-  });
+  try {
+      const json = JSON.parse(row[7]);
+      const car = json[0]?.car;
+      bitrixId = json[0]?.bitrixId;
+      carStr = getCarHeader(car);
+      
+      const doc = SpreadsheetApp.getActiveSpreadsheet();
+      const sheet = doc.getSheetByName('MarketData');
+      const allOffers = getAllOffersForOrder(sheet, orderId);
+      
+      allOffers.forEach(off => {
+          off.items.forEach(item => {
+              if (item.rank === 'ЛИДЕР') {
+                  const name = item.AdminName || item.name;
+                  const price = item.adminPrice || item.sellerPrice || 0;
+                  const cur = item.adminCurrency || item.sellerCurrency || 'RUB';
+                  const qty = item.AdminQuantity || item.quantity || 1;
+                  itemsHtml += `• ${name} — ${price} ${cur} x ${qty} шт\n`;
+              }
+          });
+      });
+      
+  } catch(e) { console.error(e); }
 
-  if (!hasItems) {
-      msg += `(Нет утвержденных позиций)\n`;
+  let msg = `✅ <b>КП СФОРМИРОВАНО</b>\n`;
+  msg += `Заказ: <code>${orderId}</code>\n\n`;
+  
+  msg += `🚘 <b>Машина:</b> ${carStr}\n`;
+  msg += `👤 <b>Клиент:</b> ${clientName}\n`;
+  msg += `🔢 <b>VIN:</b> <code>${row[4]}</code>\n\n`;
+  
+  msg += `📋 <b>ПОЗИЦИИ (Утверждено):</b>\n`;
+  if (itemsHtml) msg += itemsHtml;
+  else msg += `(Нет позиций)\n`;
+
+  const leadTitle = `${carStr} | ${clientName}`;
+
+  if (bitrixId) {
+      msg += `\n🔗 <a href="${B24_BASE_URL}/crm/lead/details/${bitrixId}/">${leadTitle}</a>`;
+  } else {
+      msg += `\n🔗 <a href="${B24_BASE_URL}/crm/lead/list/">Открыть CRM</a>`;
   }
 
   return msg;
 }
 
+// Task 24: TG Purchase (Updated)
 function formatPurchaseConfirmationMessage(orderId, row) {
-  const details = String(row[8] || '');
-  const lines = details.split('\n');
+  let carStr = "Авто не указано";
+  let bitrixId = null;
+  let itemsHtml = "";
+  let totalSum = 0;
+  let clientName = row[5];
   
+  // Use Column I (row[8]) for accurate parsing if available, as it is the SSOT for the Receipt
+  try {
+      const json = JSON.parse(row[7]);
+      const car = json[0]?.car;
+      bitrixId = json[0]?.bitrixId;
+      carStr = getCarHeader(car);
+      
+      const receiptText = String(row[8] || '');
+      const lines = receiptText.split('\n');
+      lines.forEach((line, idx) => {
+          if (idx === 0) return; // Skip header
+          if (line.includes('✅')) {
+             const parts = line.split('|').map(p => p.trim());
+             // Format: ✅ | Name | Qtyшт | PriceSym
+             if (parts.length >= 4) {
+                 const name = parts[1];
+                 const qtyStr = parts[2];
+                 const priceStr = parts[3];
+                 
+                 const qty = parseInt(qtyStr.replace(/\D/g, '')) || 1;
+                 const price = parseInt(priceStr.replace(/\D/g, '')) || 0;
+                 
+                 totalSum += (price * qty);
+                 itemsHtml += `• ${name} — ${price}₽ x ${qty} шт\n`;
+             }
+          }
+      });
+      
+      // Fallback to scanning offers if Col I parsing failed (e.g. totalSum 0 but should be more)
+      if (totalSum === 0) {
+          const doc = SpreadsheetApp.getActiveSpreadsheet();
+          const sheet = doc.getSheetByName('MarketData');
+          const allOffers = getAllOffersForOrder(sheet, orderId);
+          allOffers.forEach(off => {
+              off.items.forEach(item => {
+                  if (item.rank === 'ЛИДЕР') {
+                      const price = item.adminPrice || item.sellerPrice || 0;
+                      const qty = item.AdminQuantity || item.quantity || 1;
+                      totalSum += (price * qty);
+                      itemsHtml += `• ${item.AdminName || item.name} — ${price}₽ x ${qty} шт\n`;
+                  }
+              });
+          });
+      }
+
+  } catch(e) {}
+
   let msg = `🛍 <b>КЛИЕНТ ГОТОВ КУПИТЬ</b>\n`;
-  msg += `Заказ: <code>${orderId}</code>\n`;
-  msg += `Клиент: <b>${row[5]}</b>\n`;
-  const carLine = lines.length > 0 ? lines[0] : "Авто не указано";
-  msg += `Авто: <b>${carLine}</b>\n\n`;
+  msg += `Заказ: <code>${orderId}</code>\n\n`;
+  
+  msg += `🚘 <b>Машина:</b> ${carStr}\n`;
+  msg += `👤 <b>Клиент:</b> ${clientName}\n\n`;
   
   msg += `📋 <b>ПОЗИЦИИ:</b>\n`;
-  let total = 0;
+  msg += itemsHtml;
   
-  lines.forEach((line, idx) => {
-    if (idx === 0) return; 
-    if (line.includes('✅')) {
-      const parts = line.split('|').map(p => p.trim());
-      if (parts.length >= 4) {
-        msg += `• ${parts[1]} — ${parts[3]} x ${parts[2]}\n`;
-        const priceNum = parseInt(parts[3].replace(/\D/g, '')) || 0;
-        const qtyNum = parseInt(parts[2].replace(/\D/g, '')) || 1;
-        total += priceNum * qtyNum;
-      }
-    }
-  });
+  msg += `\n💰 <b>ИТОГО: ${totalSum.toLocaleString()} руб.</b>\n`;
 
-  msg += `\n<b>ИТОГО: ${total.toLocaleString('ru-RU')} руб.</b>`;
-  msg += `\n\n🔗 <a href="${B24_BASE_URL}/crm/lead/list/">Открыть сделку в CRM</a>`;
+  const leadTitle = `${carStr} | ${clientName}`;
+
+  if (bitrixId) {
+      msg += `\n🚀 <a href="${B24_BASE_URL}/crm/lead/details/${bitrixId}/">${leadTitle}</a>, сконвертируйте в сделку!`;
+  } else {
+      msg += `\n🚀 <a href="${B24_BASE_URL}/crm/lead/list/">Открыть CRM</a>`;
+  }
   return msg;
 }
 
+// Task 22: New Offer Notification (Updated)
+function formatNewOfferMessage(offer, offerNum, parentRow) {
+    let carStr = "Авто не найдено";
+    let clientName = "Неизвестно";
+    let vin = offer.vin;
+    let bitrixId = null;
+    
+    if (parentRow) {
+        try {
+            clientName = parentRow[5];
+            const json = JSON.parse(parentRow[7]);
+            const car = json[0]?.car;
+            bitrixId = json[0]?.bitrixId;
+            carStr = getCarHeader(car);
+        } catch(e) {}
+    }
+
+    let msg = `💰 <b>НОВОЕ ПРЕДЛОЖЕНИЕ (№${offerNum})</b>\n`;
+    msg += `К заказу: <code>${offer.parentId}</code>\n`;
+    msg += `Поставщик: <b>${offer.clientName}</b>\n\n`;
+    
+    msg += `🚘 <b>Машина:</b> ${carStr}\n`;
+    msg += `👤 <b>Клиент:</b> ${clientName}\n`;
+    msg += `🔢 <b>VIN:</b> <code>${vin}</code>\n`;
+    
+    const leadTitle = `${carStr} | ${clientName}`;
+
+    if (bitrixId) {
+      msg += `\n🔗 <a href="${B24_BASE_URL}/crm/lead/details/${bitrixId}/">${leadTitle}</a>`;
+    }
+    
+    return msg;
+}
+
 function formatNewOrderMessage(order, b24Result) {
+  const car = order.items && order.items.length > 0 ? order.items[0].car : null;
+  const carStr = getCarHeader(car);
+  
   let msg = `🔥 <b>НОВЫЙ ЗАКАЗ</b>\n`;
   msg += `ID: <code>${order.id}</code>\n`;
   msg += `Клиент: <b>${order.clientName}</b>\n`;
   msg += `VIN: <code>${order.vin}</code>\n\n`;
+  
+  msg += `🚘 <b>Машина:</b> ${carStr}\n\n`;
   
   msg += `📋 <b>ПОЗИЦИИ:</b>\n`;
   if (order.items) {
@@ -483,19 +636,25 @@ function countOffersForOrder(sheet, parentId) {
   return count;
 }
 
+// Task 21: New format for Summary/Receipt in Col I
 function generateFinalOrderReceipt(car, leaderItems) {
-    let lines = [car ? `${car.model} ${car.year}` : "АВТО"];
+    // Must include price for parsing logic in Task 24 to work correctly
+    let lines = [getCarHeader(car)];
     leaderItems.forEach(item => {
         const price = item.adminPrice || item.sellerPrice || 0;
         const sym = (item.adminCurrency === 'USD') ? '$' : '₽';
         const name = item.AdminName || item.name;
+        // Format: Check | Name | Qty | Price
         lines.push(`✅ | ${name} | ${item.quantity}шт | ${price}${sym}`);
     });
     return lines.join('\n');
 }
 
 function generateOrderSummary(items) {
-    return items.map(i => `⬜ | ${i.AdminName || i.name} | ${i.quantity} шт`).join('\n');
+    let car = items[0]?.car;
+    let header = getCarHeader(car);
+    const lines = items.map(i => `⬜ | ${i.AdminName || i.name} | ${i.quantity} шт`);
+    return `${header}\n${lines.join('\n')}`;
 }
 
 function generateOfferSummary(items) {
