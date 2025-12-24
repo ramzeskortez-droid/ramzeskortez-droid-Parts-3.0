@@ -5,7 +5,7 @@ import { Order, OrderStatus, Currency } from '../types';
 import { Pagination } from './Pagination';
 import { 
   Search, RefreshCw, ChevronRight, FileText, 
-  ArrowRight, PackageCheck, History, X, User, AlertTriangle, Edit, CheckCircle2, ChevronDown, Calendar, Car, Hash, Phone
+  ArrowRight, PackageCheck, History, X, User, AlertTriangle, Edit, CheckCircle2, ChevronDown, Calendar, Car, Hash, Phone, Ban, Save, Edit3
 } from 'lucide-react';
 
 interface ActionLog {
@@ -26,7 +26,10 @@ export const AdminInterface: React.FC = () => {
   const [logs, setLogs] = useState<ActionLog[]>([]);
   const [showLogs, setShowLogs] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState<string | null>(null);
-  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+  
+  // States for Edit Mode
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null); 
+  const [editForm, setEditForm] = useState<any>(null); 
   
   const [approvedIds, setApprovedIds] = useState<Set<string>>(new Set());
   const [vanishingIds, setVanishingIds] = useState<Set<string>>(new Set());
@@ -34,6 +37,8 @@ export const AdminInterface: React.FC = () => {
 
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
+  
+  // Store admin price inputs. Key: "orderId-offerId-itemName"
   const [adminInputs, setAdminInputs] = useState<Record<string, { price: number; currency: Currency }>>({});
 
   const interactionLock = useRef<number>(0);
@@ -74,13 +79,22 @@ export const AdminInterface: React.FC = () => {
       offerId: string, 
       orderId: string, 
       sellerName: string,
-      selectedAdminPrice: number,
-      selectedAdminCurrency: Currency
+      currentAdminPrice: number,
+      currentAdminCurrency: Currency
   ) => {
+    const inputKey = `${orderId}-${offerId}-${itemName}`;
+    const inputState = adminInputs[inputKey];
+    
+    // Приоритет: Введенное значение в инпуте > Текущее значение в базе > Дефолт 0
+    const finalPrice = inputState?.price ?? currentAdminPrice ?? 0;
+    const finalCurrency = inputState?.currency ?? currentAdminCurrency ?? 'RUB';
+
     interactionLock.current = Date.now();
-    addLog(`Выбор: ${itemName} от ${sellerName}`, "info");
+    addLog(`Выбор: ${itemName} от ${sellerName} (${finalPrice} ${finalCurrency})`, "info");
     const targetItemName = itemName.trim().toLowerCase();
 
+    // Optimistic Update - INSTANT FEEDBACK
+    // STRICT LOGIC: Ensure only ONE leader per item per order
     setOrders(prev => prev.map(o => {
       if (o.id !== orderId) return o;
       return {
@@ -88,13 +102,23 @@ export const AdminInterface: React.FC = () => {
         offers: o.offers?.map(off => ({
           ...off,
           items: off.items.map(it => {
+            // Match item by name
             if (it.name.trim().toLowerCase() === targetItemName) {
-              return { 
-                  ...it, 
-                  rank: off.id === offerId ? 'ЛИДЕР' : 'РЕЗЕРВ',
-                  adminPrice: off.id === offerId ? selectedAdminPrice : it.adminPrice,
-                  adminCurrency: off.id === offerId ? selectedAdminCurrency : it.adminCurrency
-              };
+              // If this is the chosen offer -> LEADER
+              if (off.id === offerId) {
+                  return { 
+                      ...it, 
+                      rank: 'ЛИДЕР', 
+                      adminPrice: finalPrice,
+                      adminCurrency: finalCurrency
+                  };
+              } else {
+                  // EVERYONE ELSE -> RESERVE
+                  return {
+                      ...it,
+                      rank: 'РЕЗЕРВ'
+                  };
+              }
             }
             return it;
           })
@@ -103,11 +127,11 @@ export const AdminInterface: React.FC = () => {
     }));
     
     try {
-      await SheetService.updateRank(vin, itemName, offerId, selectedAdminPrice, selectedAdminCurrency);
+      await SheetService.updateRank(vin, itemName, offerId, finalPrice, finalCurrency);
       addLog(`Подтверждено: ${itemName}`, "success");
     } catch (e) {
       addLog(`Ошибка обновления`, "error");
-      fetchData(true);
+      fetchData(true); // Revert on error
     }
   };
 
@@ -124,11 +148,14 @@ export const AdminInterface: React.FC = () => {
       await SheetService.formCP(orderId);
       setEditingOrderId(null);
       setApprovedIds(prev => { const n = new Set(prev); n.delete(orderId); return n; });
-      setVanishingIds(prev => new Set(prev).add(orderId));
+      setVanishingIds(prev => new Set(prev).add(orderId)); // Move to archive visually
+      
+      // Update local state to reflect 'isProcessed' = true so it moves to Archive tab
       setTimeout(() => {
-          setOrders(prev => prev.filter(o => o.id !== orderId));
+          setOrders(prev => prev.map(o => o.id === orderId ? { ...o, isProcessed: true } : o));
           setVanishingIds(prev => { const n = new Set(prev); n.delete(orderId); return n; });
           setIsSubmitting(null);
+          // fetch data to confirm
           fetchData(true);
       }, 700);
     } catch (err) {
@@ -139,11 +166,103 @@ export const AdminInterface: React.FC = () => {
     }
   };
 
+  // --- EDIT MODE HANDLERS ---
+  const startEditing = (order: Order) => {
+     setEditingOrderId(order.id);
+     setEditForm(JSON.parse(JSON.stringify(order))); 
+  };
+
+  const saveChanges = async () => {
+     if (!editingOrderId || !editForm) return;
+     
+     const originalOrder = orders.find(o => o.id === editingOrderId);
+     if (!originalOrder) return;
+     
+     const newCar: any = { ...originalOrder.car }; 
+     newCar.AdminModel = editForm.car.model; 
+     newCar.AdminYear = editForm.car.year;
+     
+     const newItems = originalOrder.items.map((origItem, idx) => {
+         const editedItem = editForm.items[idx];
+         if (!editedItem) return origItem;
+         
+         const newItem = { ...origItem };
+         newItem.AdminName = editedItem.name;
+         newItem.AdminQuantity = editedItem.quantity;
+         newItem.car = newCar; 
+         
+         if (idx === 0 && originalOrder.clientPhone) {
+             (newItem as any).clientPhone = originalOrder.clientPhone;
+         }
+         
+         return newItem;
+     });
+     
+     setLoading(true);
+     
+     // OPTIMISTIC UI UPDATE: Apply changes to local state IMMEDIATELY
+     setOrders(prev => prev.map(o => {
+         if (o.id === editingOrderId) {
+             return {
+                 ...o,
+                 car: newCar,
+                 items: newItems
+             };
+         }
+         return o;
+     }));
+
+     setSuccessToast({ message: "Изменения сохранены", id: Date.now().toString() });
+     setEditingOrderId(null);
+     setEditForm(null);
+
+     try {
+         await SheetService.updateOrderJson(editingOrderId, newItems);
+         // Fetch later just to sync
+         setTimeout(() => fetchData(true), 1000); 
+     } catch (e) {
+         console.error(e);
+         alert("Ошибка сохранения на сервере, но локально данные обновлены.");
+     } finally {
+         setLoading(false);
+         setTimeout(() => setSuccessToast(null), 3000);
+     }
+  };
+
+  const cancelEditing = () => {
+      setEditingOrderId(null);
+      setEditForm(null);
+  };
+
+  const handleAnnulOrder = async (orderId: string) => {
+      if (!window.confirm("Вы уверены, что хотите АННУЛИРОВАТЬ этот заказ? Это действие необратимо.")) return;
+      
+      setVanishingIds(prev => new Set(prev).add(orderId));
+      try {
+          await SheetService.refuseOrder(orderId);
+          setTimeout(() => {
+              setOrders(prev => prev.map(o => o.id === orderId ? { ...o, isRefused: true } : o));
+              setVanishingIds(prev => { const n = new Set(prev); n.delete(orderId); return n; });
+              fetchData(true);
+          }, 700);
+      } catch (e) {
+          console.error(e);
+          alert("Ошибка аннулирования");
+          setVanishingIds(prev => { const n = new Set(prev); n.delete(orderId); return n; });
+      }
+  };
+
   const filteredOrders = useMemo(() => orders.filter(o => {
     const matchSearch = o.vin.toLowerCase().includes(searchQuery.toLowerCase()) || o.id.toLowerCase().includes(searchQuery.toLowerCase());
+    
     const isProcessed = o.isProcessed === true || o.isProcessed === 'Y';
-    if (activeTab === 'open') return matchSearch && o.status === OrderStatus.OPEN && !isProcessed;
-    return matchSearch && (o.status === OrderStatus.CLOSED || isProcessed);
+    
+    // Tab Logic Fix:
+    // OPEN tab: Status OPEN AND Not Processed AND Not Refused
+    if (activeTab === 'open') return matchSearch && o.status === OrderStatus.OPEN && !isProcessed && !o.isRefused; 
+    
+    // ARCHIVE tab: Status CLOSED OR Processed OR Refused
+    return matchSearch && (o.status === OrderStatus.CLOSED || isProcessed || o.isRefused);
   }), [orders, searchQuery, activeTab]);
 
   const paginatedOrders = useMemo(() => {
@@ -162,35 +281,14 @@ export const AdminInterface: React.FC = () => {
           </div>
       )}
 
-      {showLogs && (
-        <div className="fixed inset-y-0 right-0 w-80 bg-white shadow-2xl z-[150] border-l border-slate-200 flex flex-col animate-in slide-in-from-right duration-300">
-           <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <div className="flex items-center gap-2"><History size={16}/><h2 className="text-[11px] font-black uppercase">История</h2></div>
-              <button onClick={() => setShowLogs(false)} className="p-1 hover:bg-slate-200 rounded"><X size={16}/></button>
-           </div>
-           <div className="flex-grow overflow-y-auto p-4 space-y-3 text-[10px]">
-              {logs.map(log => (
-                <div key={log.id} className="font-medium border-b border-slate-50 pb-2">
-                   <div className="flex justify-between mb-1"><span className="text-[8px] text-slate-400 font-bold">{log.time}</span><span className={`text-[8px] font-black uppercase ${log.type === 'success' ? 'text-emerald-500' : log.type === 'error' ? 'text-red-500' : 'text-blue-500'}`}>{log.type}</span></div>
-                   <p className="text-slate-700 leading-tight">{log.text}</p>
-                </div>
-              ))}
-           </div>
-        </div>
-      )}
-
-      {loading && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm bg-white/40">
-           <div className="flex flex-col items-center gap-2"><RefreshCw className="w-8 h-8 text-slate-950 animate-spin" /><span className="text-[9px] font-black uppercase">Синхронизация...</span></div>
-        </div>
-      )}
-
+      {/* HEADER & LOGS */}
       <div className="flex flex-col sm:flex-row justify-between items-center gap-3">
         <div className="flex items-center gap-2"><div className="w-8 h-8 bg-slate-950 rounded-lg flex items-center justify-center text-white"><FileText size={16}/></div><h1 className="text-sm font-black tracking-tight uppercase italic">Admin Panel</h1></div>
         <div className="flex items-center gap-2">
            <button onClick={() => setShowLogs(true)} className="p-1.5 bg-white border border-slate-200 rounded-lg relative"><History size={14}/></button>
            <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200">
-              <button onClick={() => setActiveTab('open')} className={`px-4 py-1 rounded-md text-[10px] font-bold uppercase ${activeTab === 'open' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500'}`}>Новые ({orders.filter(o => o.status === 'ОТКРЫТ' && !o.isProcessed).length})</button>
+              {/* Count logic for tabs */}
+              <button onClick={() => setActiveTab('open')} className={`px-4 py-1 rounded-md text-[10px] font-bold uppercase ${activeTab === 'open' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500'}`}>Новые ({orders.filter(o => o.status === 'ОТКРЫТ' && !o.isProcessed && !o.isRefused).length})</button>
               <button onClick={() => setActiveTab('closed')} className={`px-4 py-1 rounded-md text-[10px] font-bold uppercase ${activeTab === 'closed' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500'}`}>Архив</button>
            </div>
            <button onClick={() => fetchData()} className="p-1.5 bg-slate-900 text-white rounded-lg"><RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''}/></button>
@@ -203,7 +301,6 @@ export const AdminInterface: React.FC = () => {
             <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Поиск по VIN или ID..." className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-bold outline-none" />
         </div>
         
-        {/* TABLE HEADER - FOR DESKTOP - GRID COLS ADJUSTED FOR VIN */}
         <div className="hidden md:grid grid-cols-[80px_100px_1.5fr_60px_130px_1fr_110px_90px_20px] gap-4 px-4 py-3 bg-slate-50/80 border-b border-slate-100 text-[9px] font-black uppercase text-slate-400 tracking-wider">
            <div>ID</div>
            <div>Марка</div>
@@ -218,80 +315,44 @@ export const AdminInterface: React.FC = () => {
 
         {paginatedOrders.map(order => {
           const isExpanded = expandedTenders[order.id];
-          const isCurrentSubmitting = isSubmitting === order.id;
           const isEditing = editingOrderId === order.id;
           const isApproved = approvedIds.has(order.id);
           const isVanishing = vanishingIds.has(order.id);
           const isVisualSuccess = isApproved || isVanishing;
 
-          // Helper to split Brand/Model
-          const fullModel = order.car?.model || 'N/A';
+          const effectiveModel = order.car?.AdminModel || order.car?.model || 'N/A';
+          const effectiveYear = order.car?.AdminYear || order.car?.year || '-';
+          
+          const fullModel = effectiveModel;
           const brandPart = fullModel.split(' ')[0];
           const modelPart = fullModel.split(' ').slice(1).join(' ') || '-';
           
-          let containerStyle = isVanishing ? "opacity-0 max-h-0 py-0 overflow-hidden" : isApproved ? "bg-emerald-50 border-emerald-200" : isExpanded ? "border-l-indigo-600 ring-1 ring-indigo-600 shadow-xl bg-white relative z-10 rounded-xl my-3" : "hover:bg-slate-50 border-b border-slate-100 last:border-0";
+          let containerStyle = isVanishing ? "opacity-0 max-h-0 py-0 overflow-hidden" : isApproved ? "bg-emerald-50 border-emerald-200" : order.isRefused ? "bg-red-50 border-red-200 opacity-60 grayscale-[0.5]" : isExpanded ? "border-l-indigo-600 ring-1 ring-indigo-600 shadow-xl bg-white relative z-10 rounded-xl my-3" : "hover:bg-slate-50 border-b border-slate-100 last:border-0";
 
           const offersCount = order.offers?.length || 0;
           const hasOffers = offersCount > 0;
+          const currentData = isEditing ? editForm : order;
 
           return (
             <div key={order.id} className={`transition-all duration-500 border-l-4 ${containerStyle}`}>
-              {/* MAIN ROW - GRID LAYOUT UPDATED */}
+              {/* MAIN ROW */}
               <div onClick={() => !isVisualSuccess && setExpandedTenders(p => ({ ...p, [order.id]: !isExpanded }))} className="p-3 cursor-pointer select-none grid grid-cols-1 md:grid-cols-[80px_100px_1.5fr_60px_130px_1fr_110px_90px_20px] gap-3 md:gap-4 items-center text-[10px]">
-                  
-                  {/* ID */}
-                  <div className="font-mono font-bold truncate flex items-center gap-2">
-                     <span className="md:hidden text-slate-400">ID:</span>
-                     {order.id}
-                  </div>
-
-                  {/* BRAND */}
-                  <div className="font-black uppercase truncate text-slate-800 flex items-center gap-2">
-                     <span className="md:hidden text-slate-400 w-12">Марка:</span>
-                     {brandPart}
-                  </div>
-
-                  {/* MODEL */}
-                  <div className="font-black uppercase truncate text-slate-600 flex items-center gap-2">
-                     <span className="md:hidden text-slate-400 w-12">Модель:</span>
-                     {modelPart}
-                  </div>
-
-                  {/* YEAR */}
-                  <div className="font-bold text-slate-500 flex items-center gap-2">
-                     <span className="md:hidden text-slate-400 w-12">Год:</span>
-                     {order.car?.year}
-                  </div>
-
-                  {/* VIN - NEW COLUMN */}
-                  <div className="font-mono font-bold text-slate-500 truncate hidden md:block">
-                     {order.vin}
-                  </div>
-
-                  {/* CLIENT */}
-                  <div className="font-bold uppercase text-slate-600 truncate flex items-center gap-1.5">
-                     <User size={12} className="text-slate-300 shrink-0"/>
-                     <span className="truncate">{order.clientName}</span>
-                  </div>
-                  
-                  {/* OFFERS STATUS */}
+                  <div className="font-mono font-bold truncate flex items-center gap-2"><span className="md:hidden text-slate-400">ID:</span>{order.id}</div>
+                  <div className="font-black uppercase truncate text-slate-800 flex items-center gap-2"><span className="md:hidden text-slate-400 w-12">Марка:</span>{brandPart}</div>
+                  <div className="font-black uppercase truncate text-slate-600 flex items-center gap-2"><span className="md:hidden text-slate-400 w-12">Модель:</span>{modelPart}</div>
+                  <div className="font-bold text-slate-500 flex items-center gap-2"><span className="md:hidden text-slate-400 w-12">Год:</span>{effectiveYear}</div>
+                  <div className="font-mono font-bold text-slate-500 truncate hidden md:block">{order.vin}</div>
+                  <div className="font-bold uppercase text-slate-600 truncate flex items-center gap-1.5"><User size={12} className="text-slate-300 shrink-0"/><span className="truncate">{order.clientName}</span></div>
                   <div className="flex">
+                    {order.isRefused ? <span className="px-2.5 py-1 rounded-md font-black text-[9px] uppercase border shadow-sm bg-red-100 text-red-600 border-red-200 flex items-center gap-1"><Ban size={10}/> АННУЛИРОВАН</span> : 
+                    // TASK 18.1: Always show offers count for visual tracking
                     <span className={`px-2.5 py-1 rounded-md font-black text-[9px] uppercase border shadow-sm flex items-center gap-1.5 ${hasOffers ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-600 border-red-100'}`}>
-                        <div className={`w-1.5 h-1.5 rounded-full ${hasOffers ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}></div>
+                        {order.isProcessed && <CheckCircle2 size={10} className="text-emerald-600"/>}
                         {offersCount} офферов
-                    </span>
+                    </span>}
                   </div>
-
-                  {/* DATE */}
-                  <div className="font-bold text-slate-400 md:text-right flex items-center md:justify-end gap-1">
-                     <Calendar size={10} className="md:hidden inline"/>
-                     {order.createdAt.split(/[\n,]/)[0]}
-                  </div>
-
-                  {/* ACTION ICON */}
-                  <div className="flex justify-end items-center">
-                    {isVisualSuccess ? <CheckCircle2 size={16} className="text-emerald-600"/> : <ChevronRight size={14} className={`text-slate-300 transition-transform ${isExpanded ? 'rotate-90 text-indigo-600' : ''}`}/>}
-                  </div>
+                  <div className="font-bold text-slate-400 md:text-right flex items-center md:justify-end gap-1"><Calendar size={10} className="md:hidden inline"/>{order.createdAt.split(/[\n,]/)[0]}</div>
+                  <div className="flex justify-end items-center">{isVisualSuccess ? <CheckCircle2 size={16} className="text-emerald-600"/> : <ChevronRight size={14} className={`text-slate-300 transition-transform ${isExpanded ? 'rotate-90 text-indigo-600' : ''}`}/>}</div>
               </div>
 
               {isExpanded && !isVisualSuccess && (
@@ -299,85 +360,103 @@ export const AdminInterface: React.FC = () => {
                   
                   {/* ADMIN DETAILED INFO BLOCK */}
                   <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-4 text-[10px] shadow-sm">
-                      <div className="flex items-center gap-2 mb-3">
-                         <FileText size={12} className="text-slate-400"/> 
-                         <span className="font-black uppercase text-slate-500">Детали заказа</span>
-                      </div>
-                      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-                         {/* CLIENT INFO */}
-                         <div className="md:col-span-1 border-r border-slate-200 pr-4">
-                             <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Клиент</span>
-                             <div className="flex flex-col gap-1">
-                                <span className="font-black text-indigo-700 uppercase">{order.clientName}</span>
-                                {/* Note: Phone is not directly in Order object usually, unless stored in clientName or separate field */}
+                      <div className="flex items-center justify-between mb-3">
+                         <div className="flex items-center gap-2">
+                             <FileText size={12} className="text-slate-400"/> 
+                             <span className="font-black uppercase text-slate-500">Детали заказа</span>
+                         </div>
+                         {isEditing && (
+                             <div className="flex gap-2">
+                                 <button onClick={saveChanges} className="flex items-center gap-1 px-3 py-1 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-black uppercase text-[9px] shadow-sm">
+                                     <Save size={10}/> Сохранить
+                                 </button>
+                                 <button onClick={cancelEditing} className="flex items-center gap-1 px-3 py-1 bg-white text-slate-500 rounded-lg hover:bg-slate-100 font-bold uppercase text-[9px] border border-slate-200">
+                                     <X size={10}/> Отмена
+                                 </button>
                              </div>
-                         </div>
-                         {/* CAR INFO */}
-                         <div>
-                            <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">VIN</span>
-                            <span className="font-mono font-black text-slate-800">{order.vin}</span>
-                         </div>
-                         <div>
-                            <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Марка</span>
-                            <span className="font-black text-slate-700 uppercase">{brandPart}</span>
-                         </div>
-                         <div>
+                         )}
+                      </div>
+                      
+                      <div className="grid grid-cols-2 md:grid-cols-7 gap-4">
+                         <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Клиент</span><span className="font-black text-indigo-700 uppercase">{order.clientName}</span></div>
+                         <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Телефон</span><span className="font-bold text-slate-700">{order.clientPhone || '-'}</span></div>
+                         <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">VIN</span><span className="font-mono font-black text-slate-800">{order.vin}</span></div>
+                         <div className={isEditing ? 'bg-white p-1 rounded ring-2 ring-blue-100' : ''}>
                             <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Модель</span>
-                            <span className="font-black text-slate-700 uppercase">{modelPart}</span>
+                            {isEditing ? <input value={currentData.car?.model || ''} onChange={e => setEditForm({...editForm, car: {...editForm.car, model: e.target.value}})} className="w-full text-[10px] font-black uppercase outline-none border-b border-blue-300" /> : <span className="font-black text-slate-700 uppercase">{effectiveModel}</span>}
                          </div>
-                         <div>
-                            <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Кузов</span>
-                            <span className="font-black text-slate-700 uppercase">{order.car?.bodyType || '-'}</span>
-                         </div>
-                         <div>
+                         <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Марка</span><span className="font-black text-slate-700 uppercase">{brandPart}</span></div>
+                         <div className={isEditing ? 'bg-white p-1 rounded ring-2 ring-blue-100' : ''}>
                             <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Год</span>
-                            <span className="font-black text-slate-700 uppercase">{order.car?.year || '-'}</span>
+                            {isEditing ? <input value={currentData.car?.year || ''} onChange={e => setEditForm({...editForm, car: {...editForm.car, year: e.target.value}})} className="w-full text-[10px] font-black uppercase outline-none border-b border-blue-300" /> : <span className="font-black text-slate-700 uppercase">{effectiveYear}</span>}
                          </div>
+                         <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Кузов</span><span className="font-black text-slate-700 uppercase">{order.car?.bodyType || '-'}</span></div>
                       </div>
                   </div>
 
                   <div className="space-y-3">
-                     {order.items.map((item, idx) => {
-                        const targetItemName = item.name.trim().toLowerCase();
+                     {currentData.items.map((item: any, idx: number) => {
+                        const effectiveItemName = isEditing ? item.name : (item.AdminName || item.name);
+                        const originalName = order.items[idx]?.name || item.name;
+                        const targetItemName = originalName.trim().toLowerCase();
                         const detailOffers = (order.offers || []).flatMap(off => off.items.filter(i => i.name.trim().toLowerCase() === targetItemName).map(i => ({ ...i, sellerName: off.clientName, offerId: off.id })));
 
                         return (
                           <div key={idx} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                             <div className="bg-slate-900 text-white px-4 py-1.5 flex justify-between items-center"><span className="text-[9px] font-black uppercase">{item.name}</span></div>
+                             <div className={`px-4 py-2 flex justify-between items-center ${isEditing ? 'bg-blue-50 border-b border-blue-200' : 'bg-slate-900 text-white'}`}>
+                                 {isEditing ? (
+                                     <div className="flex gap-2 w-full">
+                                         <input value={item.name} onChange={e => { const newItems = [...editForm.items]; newItems[idx].name = e.target.value; setEditForm({...editForm, items: newItems}); }} className="bg-transparent border-b border-blue-300 outline-none w-2/3 text-[10px] font-black uppercase text-blue-900" />
+                                         <input type="number" value={item.quantity} onChange={e => { const newItems = [...editForm.items]; newItems[idx].quantity = parseInt(e.target.value); setEditForm({...editForm, items: newItems}); }} className="bg-transparent border-b border-blue-300 outline-none w-1/6 text-[10px] font-black uppercase text-blue-900 text-center" />
+                                     </div>
+                                 ) : (
+                                     <span className="text-[9px] font-black uppercase">{effectiveItemName} ({item.AdminQuantity || item.quantity} шт)</span>
+                                 )}
+                             </div>
+                             
                              <div className="divide-y divide-slate-100">
                                 {detailOffers.map((off, oIdx) => {
                                   const isLeader = off.rank === 'ЛИДЕР';
-                                  const inputKey = `${order.id}-${off.offerId}-${item.name}`;
+                                  const inputKey = `${order.id}-${off.offerId}-${originalName}`;
                                   const currentInput = adminInputs[inputKey];
                                   const valPrice = currentInput?.price ?? off.adminPrice ?? off.sellerPrice ?? 0;
                                   const valCurrency = currentInput?.currency ?? off.adminCurrency ?? off.sellerCurrency ?? 'RUB';
 
                                   return (
-                                    <div key={oIdx} className={`p-3 grid grid-cols-[1fr_auto] gap-4 items-center ${isLeader ? 'bg-emerald-50/30' : ''}`}>
-                                       <div className="flex items-center gap-4">
-                                          <div className="flex flex-col"><span className="text-[10px] font-black uppercase">{off.sellerName}</span><span className="text-[9px] text-slate-500">Закуп: {off.sellerPrice} {off.sellerCurrency}</span></div>
+                                    // TASK 18.3: GRID LAYOUT FOR OFFERS
+                                    <div key={oIdx} className={`p-3 grid grid-cols-[1fr_100px_70px_100px] gap-4 items-center ${isLeader ? 'bg-emerald-50/30' : ''}`}>
+                                       {/* Col 1: Seller Info */}
+                                       <div className="flex items-center gap-4 min-w-0">
+                                          <div className="flex flex-col truncate"><span className="text-[10px] font-black uppercase truncate">{off.sellerName}</span><span className="text-[9px] text-slate-500">Закуп: {off.sellerPrice} {off.sellerCurrency}</span></div>
                                        </div>
-                                       <div className="flex items-center gap-3">
-                                          {(activeTab === 'open' || isEditing) && (
-                                              <div className="flex items-center gap-2 p-1 bg-white border border-slate-200 rounded-lg shadow-sm">
-                                                  <input 
-                                                    type="text" 
-                                                    value={valPrice || ''} 
-                                                    onChange={e => {
-                                                        const digits = e.target.value.replace(/\D/g, ''); // STRICT NUMERIC
-                                                        let v = parseInt(digits) || 0;
-                                                        setAdminInputs(prev => ({...prev, [inputKey]: {...(prev[inputKey] || {currency:'RUB'}), price: v}}));
-                                                    }}
-                                                    className="w-20 px-1 py-1 text-center text-[10px] font-bold bg-white text-slate-900 outline-none placeholder:text-slate-300" 
-                                                    placeholder="Цена" 
-                                                  />
-                                                  <div className="w-[1px] h-4 bg-slate-200"></div>
-                                                  <select value={valCurrency} onChange={e => setAdminInputs(prev => ({...prev, [inputKey]: {...(prev[inputKey] || {price:0}), currency: e.target.value as Currency}}))} className="text-[10px] font-bold bg-white text-slate-900 outline-none cursor-pointer"><option value="RUB">RUB</option><option value="USD">USD</option><option value="CNY">CNY</option></select>
-                                              </div>
+                                       
+                                       {/* Col 2: Price Input */}
+                                       <div className="flex items-center bg-white border border-slate-200 rounded-lg h-8 px-2 shadow-sm focus-within:ring-1 focus-within:ring-indigo-200">
+                                          <input 
+                                            type="text" 
+                                            value={valPrice || ''} 
+                                            onChange={e => {
+                                                const digits = e.target.value.replace(/\D/g, ''); 
+                                                let v = parseInt(digits) || 0;
+                                                setAdminInputs(prev => ({...prev, [inputKey]: {...(prev[inputKey] || {currency: valCurrency}), price: v}}));
+                                            }}
+                                            className="w-full text-center text-[10px] font-bold bg-transparent outline-none placeholder:text-slate-300" 
+                                            placeholder="0" 
+                                          />
+                                       </div>
+
+                                       {/* Col 3: Currency */}
+                                       <div className="flex items-center bg-white border border-slate-200 rounded-lg h-8 px-1 shadow-sm">
+                                          <select value={valCurrency} onChange={e => setAdminInputs(prev => ({...prev, [inputKey]: {...(prev[inputKey] || {price: valPrice}), currency: e.target.value as Currency}}))} className="w-full text-[10px] font-bold bg-transparent outline-none cursor-pointer text-center"><option value="RUB">RUB</option><option value="USD">USD</option><option value="CNY">CNY</option></select>
+                                       </div>
+                                       
+                                       {/* Col 4: Button */}
+                                       <div className="flex justify-end">
+                                          {!order.isRefused && (
+                                              <button onClick={() => handleUpdateRank(order.vin, originalName, off.offerId, order.id, off.sellerName, valPrice, valCurrency)} className={`w-full h-8 rounded-lg text-[9px] font-black uppercase shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1 ${isLeader ? 'bg-emerald-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}`}>
+                                                  {isLeader ? <><CheckCircle2 size={12}/> Лидер</> : 'Выбрать'}
+                                              </button>
                                           )}
-                                          <button onClick={() => handleUpdateRank(order.vin, item.name, off.offerId, order.id, off.sellerName, valPrice, valCurrency)} className={`px-4 py-1.5 rounded-lg text-[9px] font-black uppercase shadow-sm transition-all active:scale-95 ${isLeader ? 'bg-emerald-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}`}>
-                                              {isLeader ? 'Ок' : 'Выбрать'}
-                                          </button>
                                        </div>
                                     </div>
                                   );
@@ -388,7 +467,26 @@ export const AdminInterface: React.FC = () => {
                         );
                      })}
                   </div>
-                  <div className="flex justify-end pt-4"><button onClick={() => handleFormCP(order)} className="px-8 py-2.5 bg-red-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-red-700 transition-all shadow-lg active:scale-95">Утвердить КП</button></div>
+                  
+                  {/* FOOTER ACTIONS - TASK 18.2 */}
+                  {!order.isRefused && !isEditing && (
+                      <div className="flex justify-end items-center pt-4 border-t border-slate-100 gap-4">
+                          <div className="flex gap-2">
+                             <button onClick={() => startEditing(order)} className="flex items-center gap-1 px-3 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-bold uppercase text-[9px] border border-blue-200 transition-all">
+                                 <Edit3 size={12}/> Изменить
+                             </button>
+                             <button onClick={() => handleAnnulOrder(order.id)} className="flex items-center gap-1 px-3 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 font-bold uppercase text-[9px] border border-red-200 transition-all">
+                                 <Ban size={12}/> Аннулировать
+                             </button>
+                          </div>
+                          
+                          <div className="w-[1px] h-8 bg-slate-200"></div>
+
+                          <button onClick={() => handleFormCP(order)} className="px-8 py-2.5 bg-slate-900 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-slate-800 transition-all shadow-lg active:scale-95">
+                              Утвердить КП
+                          </button>
+                      </div>
+                  )}
                 </div>
               )}
             </div>

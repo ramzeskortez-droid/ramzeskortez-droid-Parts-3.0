@@ -142,7 +142,7 @@ export const SellerInterface: React.FC = () => {
     return rawOrders.filter(o => {
       const isSentByMe = hasSentOfferByMe(o);
       const isRelevant = activeTab === 'new' 
-        ? (o.status === OrderStatus.OPEN && !o.isProcessed && !isSentByMe)
+        ? (o.status === OrderStatus.OPEN && !o.isProcessed && !isSentByMe && !o.isRefused)
         : isSentByMe;
       
       if (!isRelevant) return false;
@@ -162,7 +162,7 @@ export const SellerInterface: React.FC = () => {
   const availableBrands = useMemo(() => {
       const brands = new Set<string>();
       rawOrders.forEach(o => {
-          if (o.status === OrderStatus.OPEN && !o.isProcessed && !hasSentOfferByMe(o)) {
+          if (o.status === OrderStatus.OPEN && !o.isProcessed && !hasSentOfferByMe(o) && !o.isRefused) {
               const brand = o.car?.model?.split(' ')[0].toUpperCase();
               if (brand) brands.add(brand);
           }
@@ -199,9 +199,6 @@ export const SellerInterface: React.FC = () => {
         return;
     }
 
-    // REMOVED window.confirm logic. 
-    // If the button is active, we assume the seller knows what they are doing.
-    
     setVanishingIds(prev => new Set(prev).add(order.id));
     setSuccessToast({ message: isRefusal ? `Отказ от заказа ${order.id} отправлен` : `Предложение к заказу ${order.id} отправлено`, id: Date.now().toString() });
     setTimeout(() => setSuccessToast(null), 3000);
@@ -312,7 +309,7 @@ export const SellerInterface: React.FC = () => {
 
       <div className="flex justify-between items-end border-b border-slate-200">
          <div className="flex gap-4">
-            <button onClick={() => setActiveTab('new')} className={`pb-2 text-[11px] font-black uppercase transition-all relative ${activeTab === 'new' ? 'text-slate-900' : 'text-slate-400'}`}>Новые <span className="ml-1 bg-slate-900 text-white px-1.5 py-0.5 rounded text-[9px]">{rawOrders.filter(o => !hasSentOfferByMe(o) && o.status === OrderStatus.OPEN && !o.isProcessed).length}</span>{activeTab === 'new' && <span className="absolute bottom-[-2px] left-0 right-0 h-1 bg-slate-900 rounded-full"></span>}</button>
+            <button onClick={() => setActiveTab('new')} className={`pb-2 text-[11px] font-black uppercase transition-all relative ${activeTab === 'new' ? 'text-slate-900' : 'text-slate-400'}`}>Новые <span className="ml-1 bg-slate-900 text-white px-1.5 py-0.5 rounded text-[9px]">{rawOrders.filter(o => !hasSentOfferByMe(o) && o.status === OrderStatus.OPEN && !o.isProcessed && !o.isRefused).length}</span>{activeTab === 'new' && <span className="absolute bottom-[-2px] left-0 right-0 h-1 bg-slate-900 rounded-full"></span>}</button>
             <button onClick={() => setActiveTab('processed')} className={`pb-2 text-[11px] font-black uppercase transition-all relative ${activeTab === 'processed' ? 'text-indigo-600' : 'text-slate-400'}`}>Отправленные <span className="ml-1 bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded text-[9px]">{rawOrders.filter(o => hasSentOfferByMe(o)).length}</span>{activeTab === 'processed' && <span className="absolute bottom-[-2px] left-0 right-0 h-1 bg-indigo-600 rounded-full"></span>}</button>
          </div>
          <button onClick={() => fetchData(false)} className="mb-2 p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-all flex items-center gap-2"><RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''}/></button>
@@ -349,10 +346,11 @@ export const SellerInterface: React.FC = () => {
               return qty === 0;
           });
           
-          // Helper to split Brand/Model
-          const fullModel = order.car?.model || 'N/A';
+          // Helper to split Brand/Model with Admin overrides
+          const fullModel = order.car?.AdminModel || order.car?.model || 'N/A';
           const brandPart = fullModel.split(' ')[0] || '-';
           const modelPart = fullModel.split(' ').slice(1).join(' ') || '-';
+          const displayYear = order.car?.AdminYear || order.car?.year;
 
           const containerStyle = isVanishing ? "opacity-0 scale-95 h-0 overflow-hidden" : isExpanded ? "border-l-indigo-600 ring-1 ring-indigo-600 shadow-xl bg-white relative z-10 rounded-xl my-3" : "hover:bg-slate-50 border-l-transparent border-b border-slate-100 last:border-0";
 
@@ -382,7 +380,7 @@ export const SellerInterface: React.FC = () => {
                   {/* YEAR */}
                   <div className="font-bold text-slate-500 flex items-center gap-2">
                      <span className="md:hidden text-slate-400 w-12">Год:</span>
-                     {order.car?.year}
+                     {displayYear}
                   </div>
 
                   {/* DATE */}
@@ -433,7 +431,7 @@ export const SellerInterface: React.FC = () => {
                          </div>
                          <div>
                             <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Год</span>
-                            <span className="font-black text-slate-700 uppercase">{order.car?.year || '-'}</span>
+                            <span className="font-black text-slate-700 uppercase">{displayYear || '-'}</span>
                          </div>
                       </div>
                   </div>
@@ -454,6 +452,10 @@ export const SellerInterface: React.FC = () => {
                         const isPriceEmpty = !isDisabled && !myOffer && state.price === 0;
                         const isQtyDeficit = state.offeredQty < item.quantity;
                         const isUnavailable = state.offeredQty === 0;
+                        
+                        // Use Admin overrides for display
+                        const displayName = item.AdminName || item.name;
+                        const displayQty = item.AdminQuantity || item.quantity;
 
                         const handleNumInput = (raw: string, field: 'price' | 'offeredQty', max?: number) => {
                             if (isDisabled || !!myOffer) return;
@@ -469,7 +471,7 @@ export const SellerInterface: React.FC = () => {
                         const toggleUnavailable = () => {
                            if (isDisabled || !!myOffer) return;
                            // If currently 0, restore to full qty. If not 0, set to 0.
-                           const newVal = state.offeredQty === 0 ? item.quantity : 0;
+                           const newVal = state.offeredQty === 0 ? displayQty : 0;
                            setEditingItems(prev => ({ ...prev, [stateKey]: { ...(prev[stateKey] || state), offeredQty: newVal } }));
                         };
 
@@ -477,7 +479,7 @@ export const SellerInterface: React.FC = () => {
                           <div key={item.name} className={`flex flex-col md:flex-row gap-4 items-center border rounded-xl p-3 transition-all ${isWinner ? 'bg-emerald-50 border-emerald-200 ring-1 ring-emerald-100' : 'bg-slate-50/30'} ${isPriceEmpty ? 'border-red-300 bg-red-50/10' : 'border-slate-100'}`}>
                              <div className="flex-grow w-full">
                                 <div className="flex items-center gap-2 mb-1 flex-wrap">
-                                    <h4 className={`font-black text-[11px] uppercase transition-all ${isUnavailable ? 'line-through text-red-400' : 'text-slate-900'}`}>{item.name}</h4>
+                                    <h4 className={`font-black text-[11px] uppercase transition-all ${isUnavailable ? 'line-through text-red-400' : 'text-slate-900'}`}>{displayName}</h4>
                                     {isWinner && <span className="bg-emerald-600 text-white px-1.5 py-0.5 rounded text-[7px] font-black uppercase">Выбрано</span>}
                                     {isDisabled && !isWinner && isPartialWin && <span className="bg-slate-200 text-slate-500 px-1.5 py-0.5 rounded text-[7px] font-black uppercase">В резерве</span>}
                                     
@@ -488,7 +490,7 @@ export const SellerInterface: React.FC = () => {
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <span className="text-[8px] font-bold text-slate-400 uppercase">{item.category}</span>
-                                    <span className="text-[9px] font-black bg-indigo-50 text-indigo-700 px-2 rounded">Нужно: {item.quantity}</span>
+                                    <span className="text-[9px] font-black bg-indigo-50 text-indigo-700 px-2 rounded">Нужно: {displayQty}</span>
                                 </div>
                              </div>
 
@@ -504,7 +506,7 @@ export const SellerInterface: React.FC = () => {
                                     </button>
                                     <div className="space-y-1 flex-grow">
                                         <label className="text-[7px] font-bold text-slate-400 uppercase block text-center">Кол-во</label>
-                                        <input type="text" disabled={isDisabled || !!myOffer} value={state.offeredQty || 0} onChange={e => handleNumInput(e.target.value, 'offeredQty', item.quantity)} className={`w-full text-center font-bold text-[10px] border rounded-lg py-1.5 bg-white disabled:bg-slate-50 disabled:text-slate-400 outline-none focus:border-indigo-500 ${isQtyDeficit && !isUnavailable ? 'text-amber-600 border-amber-200' : 'border-slate-200'}`} placeholder="0" />
+                                        <input type="text" disabled={isDisabled || !!myOffer} value={state.offeredQty || 0} onChange={e => handleNumInput(e.target.value, 'offeredQty', displayQty)} className={`w-full text-center font-bold text-[10px] border rounded-lg py-1.5 bg-white disabled:bg-slate-50 disabled:text-slate-400 outline-none focus:border-indigo-500 ${isQtyDeficit && !isUnavailable ? 'text-amber-600 border-amber-200' : 'border-slate-200'}`} placeholder="0" />
                                     </div>
                                 </div>
 

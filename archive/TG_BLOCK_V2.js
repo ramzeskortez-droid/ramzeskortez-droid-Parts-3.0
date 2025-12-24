@@ -1,8 +1,13 @@
+
 /**
  * КОНФИГУРАЦИЯ
  */
 const TELEGRAM_TOKEN = '8584425867:AAFbjHHrSLYx6hdiXnNaaBx2dR7cD9NG2jw';
 const WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbxooqVnUce3SIllt2RUtG-KJ5EzNswyHqrTpdsTGhc6XOKW6qaUdlr6ld77LR2KQz0-/exec';
+
+// URL вебхука Битрикс24
+const B24_WEBHOOK_URL = "https://drave5inb2.temp.swtest.ru/rest/1/zt6j93x9rzn0jhtc/";
+const B24_BASE_URL = "https://drave5inb2.temp.swtest.ru";
 
 /**
  * ТОЧКА ВХОДА GET
@@ -20,88 +25,109 @@ function doGet(e) {
     return response(rows.map(r => ({
       id: r[0], parentId: r[1], type: r[2], status: r[3], vin: r[4], 
       clientName: r[5], summary: r[6], json: r[7], rank: r[8], 
-      createdAt: r[9], location: r[10], processed: r[11]
+      createdAt: r[9], location: r[10], processed: r[11], readyToBuy: r[12], refusal: r[13]
     })));
   }
-  return response({status: "alive", version: "2.1-stable"});
+  return response({status: "alive", version: "4.3.0-strict-leaders-propagation"});
 }
 
 /**
  * ТОЧКА ВХОДА POST
  */
 function doPost(e) {
-  // 1. Быстрая проверка данных
   if (!e || !e.postData) return response({error: "No post data"});
   
   const lock = LockService.getScriptLock();
-  const hasLock = lock.tryLock(5000); // Ждем максимум 5 секунд
+  const hasLock = lock.tryLock(30000); // Increased lock time for safety
   
   try {
     const contents = JSON.parse(e.postData.contents);
     const doc = SpreadsheetApp.getActiveSpreadsheet();
 
-    // --- ОБРАБОТКА TELEGRAM (Приоритет и скорость) ---
     if (contents.message || contents.callback_query) {
       const subSheet = getOrCreateSheet(doc, 'Subscribers', ['ChatID', 'Username', 'Date']);
       handleTelegramUpdate(contents, subSheet);
-      return response({status: 'telegram_ok'}); // Быстрый ответ для ТГ
+      return response({status: 'telegram_ok'});
     }
 
-    // --- ОБРАБОТКА REACT APP ---
     const sheet = getOrCreateSheet(doc, 'MarketData', [
-      'ID', 'Parent ID', 'Тип', 'Статус', 'VIN', 'Имя', 'Сводка', 'JSON', 'Ранг', 'Дата', 'Локация', 'ОБРАБОТАН'
+      'ID', 'Parent ID', 'Тип', 'Статус', 'VIN', 'Имя', 'Сводка', 'JSON', 'Детали/Цены', 'Дата', 'Локация', 'ОБРАБОТАН', 'ГОТОВ КУПИТЬ', 'ОТКАЗ'
     ]);
     const body = contents;
 
-    if (body.action === 'create') {
+    if (body.action === 'create' && body.order.type === 'ORDER') {
       const o = body.order;
       const itemsJson = JSON.stringify(o.items);
-      let summary = (o.items || []).map(i => `${i.name} (${i.quantity})`).join(', ');
+      const summary = (o.items || []).map(i => `${i.name} (${i.quantity} шт)`).join(', ');
+      const formattedDate = (o.createdAt || '').replace(', ', '\n');
+      const readableStatus = generateOrderSummary(o.items);
 
       const rowData = [
-        o.id, 
-        o.parentId || '', 
-        o.type, 
-        o.status, 
-        o.vin, 
-        o.clientName, 
-        summary, 
-        itemsJson, 
-        (o.type === 'OFFER' ? 'РЕЗЕРВ' : ''), 
-        o.createdAt, 
-        o.location, 
-        'N'
+        o.id, '', 'ORDER', o.status, o.vin, o.clientName, summary, itemsJson, readableStatus, formattedDate, o.location, 'N', 'N', 'N'
       ];
       
-      sheet.appendRow(rowData);
+      sheet.insertRowAfter(1);
+      sheet.getRange(2, 1, 1, rowData.length).setValues([rowData]);
       
+      var b24Result = addLeadWithTg(o);
       const subSheet = doc.getSheetByName('Subscribers');
-      if (o.type === 'ORDER') {
-        broadcastMessage(formatNewOrderMessage(o), subSheet);
-      } else {
-        broadcastMessage(`💰 <b>НОВОЕ ПРЕДЛОЖЕНИЕ</b>\nК заказу: <code>${o.parentId}</code>\nПоставщик: <b>${o.clientName}</b>`, subSheet);
-      }
+      broadcastMessage(formatNewOrderMessage(o, b24Result), subSheet);
     } 
-    
-    else if (body.action === 'update_rank') {
-      updateRankInSheet(sheet, body);
-    } 
-    
+    else if (body.action === 'create' && body.order.type === 'OFFER') {
+      const o = body.order;
+      const itemsJson = JSON.stringify(o.items);
+      const rowData = [o.id, o.parentId, 'OFFER', o.status, o.vin, o.clientName, 'Предложение', itemsJson, generateOfferSummary(o.items), (o.createdAt || '').replace(', ', '\n'), o.location, 'N', 'N', 'N'];
+      const insertionIndex = findBlockEndIndex(sheet, o.parentId);
+      sheet.insertRowAfter(insertionIndex);
+      sheet.getRange(insertionIndex + 1, 1, 1, rowData.length).setValues([rowData]);
+      
+      const offerNum = countOffersForOrder(sheet, o.parentId);
+      const subSheet = doc.getSheetByName('Subscribers');
+      broadcastMessage(`💰 <b>НОВОЕ ПРЕДЛОЖЕНИЕ (№${offerNum})</b>\nК заказу: <code>${o.parentId}</code>\nПоставщик: <b>${o.clientName}</b>`, subSheet);
+    }
     else if (body.action === 'form_cp') {
-      updateStatusById(sheet, body.orderId, 12, 'Y'); // Колонка L
+      updateStatusById(sheet, body.orderId, 12, 'Y'); 
+      const orderRow = findOrderRowById(sheet, body.orderId);
       const subSheet = doc.getSheetByName('Subscribers');
-      broadcastMessage(`✅ <b>КП СФОРМИРОВАНО</b>\nЗаказ: <code>${body.orderId}</code>`, subSheet);
-    } 
-    
+      broadcastMessage(orderRow ? formatCPMessage(body.orderId, orderRow) : `✅ <b>КП СФОРМИРОВАНО</b>\nЗаказ: <code>${body.orderId}</code>`, subSheet);
+    }
+    else if (body.action === 'confirm_purchase') {
+      updateStatusById(sheet, body.orderId, 13, 'Y');
+      const orderRow = findOrderRowById(sheet, body.orderId);
+      if (orderRow) {
+        const subSheet = doc.getSheetByName('Subscribers');
+        broadcastMessage(formatPurchaseConfirmationMessage(body.orderId, orderRow), subSheet);
+      }
+    }
+    else if (body.action === 'refuse_order') {
+       updateStatusById(sheet, body.orderId, 14, 'Y'); // Col N
+       closeOrderInSheet(sheet, body.orderId);
+    }
+    else if (body.action === 'update_json') {
+       // 1. Обновляем сам Заказ
+       const newJson = JSON.stringify(body.items);
+       updateStatusById(sheet, body.orderId, 8, newJson);
+       
+       const summary = body.items.map(i => {
+         const name = i.AdminName || i.name;
+         return `${name} (${i.quantity} шт)`;
+       }).join(', ');
+       updateStatusById(sheet, body.orderId, 7, summary);
+       updateStatusById(sheet, body.orderId, 9, generateOrderSummary(body.items));
+
+       // 2. Распространяем изменения (AdminName, car) на все ОФФЕРЫ этого заказа
+       propagateEditsToOffers(sheet, body.orderId, body.items);
+    }
     else if (body.action === 'close_order') {
       closeOrderInSheet(sheet, body.orderId);
     }
+    else if (body.action === 'update_rank') {
+      handleRankUpdate(sheet, body);
+    }
 
-    formatRows(sheet);
-    applyBorders(sheet);
-
+    formatSheetStyles(sheet);
+    formatRows(sheet); 
     return response({status: 'ok'});
-
   } catch (err) {
     return response({error: err.toString()});
   } finally {
@@ -109,146 +135,373 @@ function doPost(e) {
   }
 }
 
-/**
- * ЛОГИКА ТЕЛЕГРАМА (БЕЗ СПАМА)
- */
-function handleTelegramUpdate(contents, subSheet) {
-  const msg = contents.message;
-  if (!msg || !msg.text) return;
-  
-  const chatId = String(msg.chat.id);
-  const text = msg.text.trim();
-  const username = msg.from.username || msg.from.first_name || 'User';
-
-  if (text === '/start') {
-    const data = subSheet.getDataRange().getValues();
-    const exists = data.some(r => String(r[0]) === chatId);
+// === ЛОГИКА СИНХРОНИЗАЦИИ ПРАВОК ===
+function propagateEditsToOffers(sheet, orderId, newOrderItems) {
+    const data = sheet.getDataRange().getValues();
     
-    if (!exists) {
-      subSheet.appendRow([chatId, username, new Date()]);
-      sendTelegramText(chatId, `✅ <b>Вы подписаны на уведомления!</b>\nТеперь вы будете получать информацию о новых заказах.`);
-    } 
-    // Если "exists", мы ПРОСТО МОЛЧИМ. Это останавливает петлю ретраев Telegram.
-  }
+    // Создаем карту: Оригинальное Имя (lower) -> Объект с новыми данными
+    const overrideMap = {};
+    newOrderItems.forEach(i => {
+        if (i.name) {
+            overrideMap[i.name.trim().toLowerCase()] = {
+                AdminName: i.AdminName,
+                AdminQuantity: i.AdminQuantity,
+                car: i.car // Копируем весь объект авто
+            };
+        }
+    });
+
+    for (let i = 1; i < data.length; i++) {
+        // Ищем офферы, привязанные к этому заказу
+        if (String(data[i][1]) === String(orderId) && data[i][2] === 'OFFER') {
+            let items = [];
+            try { items = JSON.parse(data[i][7] || '[]'); } catch(e) {}
+            
+            let changed = false;
+            items = items.map(item => {
+                const key = item.name.trim().toLowerCase();
+                if (overrideMap[key]) {
+                    const updates = overrideMap[key];
+                    // Применяем изменения, если они есть
+                    if (updates.AdminName && item.AdminName !== updates.AdminName) {
+                        item.AdminName = updates.AdminName;
+                        changed = true;
+                    }
+                    if (updates.AdminQuantity && item.AdminQuantity !== updates.AdminQuantity) {
+                        item.AdminQuantity = updates.AdminQuantity;
+                        changed = true;
+                    }
+                    if (updates.car) {
+                        item.car = updates.car;
+                        changed = true;
+                    }
+                }
+                return item;
+            });
+
+            if (changed) {
+                // Сохраняем обновленный JSON оффера
+                sheet.getRange(i + 1, 8).setValue(JSON.stringify(items));
+                // Обновляем читаемую сводку
+                sheet.getRange(i + 1, 9).setValue(generateOfferSummary(items));
+            }
+        }
+    }
 }
 
-/**
- * ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
- */
-function updateRankInSheet(sheet, body) {
-  const { detailName, leadOfferId } = body;
+// === ЛОГИКА ЛИДЕРОВ (STRICT MODE) ===
+function handleRankUpdate(sheet, body) {
+  const { vin, detailName, leadOfferId, adminPrice, adminCurrency } = body;
   const data = sheet.getDataRange().getValues();
+  
+  // 1. Находим ParentID по OfferID
+  let parentId = null;
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][0]) === String(leadOfferId)) {
-      let items = [];
-      try { items = JSON.parse(data[i][7]); } catch(e) {}
-      let hasLeader = false;
-      items = items.map(item => {
-        if (item.name === detailName) item.rank = 'ЛИДЕР';
-        if (item.rank === 'ЛИДЕР') hasLeader = true;
-        return item;
-      });
-      sheet.getRange(i + 1, 8).setValue(JSON.stringify(items));
-      sheet.getRange(i + 1, 9).setValue(hasLeader ? 'ЛИДЕР' : 'РЕЗЕРВ');
+      parentId = data[i][1];
+      break;
     }
+  }
+  if (!parentId) return;
+
+  // 2. Ищем строку самого Заказа (для обновления итогового чека)
+  let orderRowIndex = -1;
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(parentId)) {
+      orderRowIndex = i;
+      break;
+    }
+  }
+
+  const targetNameLower = detailName.trim().toLowerCase();
+
+  // 3. ПРОХОДИМ ПО ВСЕМ СТРОКАМ ОФФЕРОВ ЭТОГО ЗАКАЗА
+  // Цель: Найти все упоминания этой детали и СБРОСИТЬ их в РЕЗЕРВ, кроме выбранного OfferID.
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][1]) === String(parentId) && data[i][2] === 'OFFER') {
+        let items = [];
+        try { items = JSON.parse(data[i][7] || '[]'); } catch(e) {}
+        
+        let changed = false;
+        items = items.map(item => {
+            // Проверяем, совпадает ли деталь (по name или AdminName)
+            const n = item.AdminName || item.name;
+            const match = n.trim().toLowerCase() === targetNameLower || item.name.trim().toLowerCase() === targetNameLower;
+            
+            if (match) {
+                // Если это строка ТОГО САМОГО оффера, который мы выбрали
+                if (String(data[i][0]) === String(leadOfferId)) {
+                    // Ставим ЛИДЕР (только если еще не стоит или цена поменялась)
+                    // Мы всегда перезаписываем, чтобы гарантировать актуальность цены
+                    item.rank = 'ЛИДЕР';
+                    if (adminPrice !== undefined) item.adminPrice = adminPrice;
+                    if (adminCurrency !== undefined) item.adminCurrency = adminCurrency;
+                    changed = true;
+                } else {
+                    // Это ОФФЕР-КОНКУРЕНТ по этой же детали -> СБРАСЫВАЕМ В РЕЗЕРВ
+                    // Сбрасываем только если был ЛИДЕР
+                    if (item.rank === 'ЛИДЕР') {
+                        item.rank = 'РЕЗЕРВ';
+                        changed = true;
+                    }
+                }
+            }
+            return item;
+        });
+
+        if (changed) {
+            sheet.getRange(i + 1, 8).setValue(JSON.stringify(items));
+            sheet.getRange(i + 1, 9).setValue(generateOfferSummary(items));
+        }
+    }
+  }
+  
+  // 4. Генерируем финальный чек для Заказа на основе обновленных данных
+  const allLeaderItems = [];
+  let carInfo = null;
+  const freshData = sheet.getDataRange().getValues(); // Читаем заново, т.к. мы обновили JSON-ы
+  
+  for (let i = 1; i < freshData.length; i++) {
+      if (String(freshData[i][1]) === String(parentId) && freshData[i][2] === 'OFFER') {
+         let oItems = JSON.parse(freshData[i][7] || '[]');
+         oItems.forEach(item => {
+             if (item.rank === 'ЛИДЕР') allLeaderItems.push(item);
+         });
+      }
+  }
+  if (orderRowIndex !== -1) {
+      try { 
+          const rawOrderItems = JSON.parse(freshData[orderRowIndex][7]);
+          const firstItem = rawOrderItems[0];
+          carInfo = firstItem.car;
+          if (carInfo && carInfo.AdminModel) carInfo.model = carInfo.AdminModel; 
+          if (carInfo && carInfo.AdminYear) carInfo.year = carInfo.AdminYear;
+      } catch(e){}
+      sheet.getRange(orderRowIndex + 1, 9).setValue(generateFinalOrderReceipt(carInfo, allLeaderItems));
   }
 }
 
-function closeOrderInSheet(sheet, orderId) {
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === String(orderId) || String(data[i][1]) === String(orderId)) {
-      sheet.getRange(i + 1, 4).setValue('ЗАКРЫТ');
+/**
+ * ФОРМАТ КП ДЛЯ ТЕЛЕГРАМА (РАСШИРЕННЫЙ)
+ */
+function formatCPMessage(orderId, row) {
+  const details = String(row[8] || '');
+  const lines = details.split('\n');
+  
+  let msg = `✅ <b>КП СФОРМИРОВАНО</b>\n`;
+  msg += `Заказ: <code>${orderId}</code>\n`;
+  msg += `Имя клиента: <b>${row[5]}</b>\n`;
+  msg += `<b>${lines[0]}</b>\n\n`;
+  
+  msg += `📋 <b>ПОЗИЦИИ:</b>\n`;
+  
+  lines.forEach((line, idx) => {
+    if (idx === 0) return; 
+    if (line.includes('✅')) {
+      const parts = line.split('|').map(p => p.trim());
+      if (parts.length >= 4) {
+        msg += `• ${parts[1]} — ${parts[3]} x ${parts[2]}\n`;
+      }
     }
+  });
+
+  return msg;
+}
+
+function formatPurchaseConfirmationMessage(orderId, row) {
+  const details = String(row[8] || '');
+  const lines = details.split('\n');
+  
+  let msg = `🛍 <b>КЛИЕНТ ГОТОВ КУПИТЬ</b>\n`;
+  msg += `Заказ: <code>${orderId}</code>\n`;
+  msg += `Клиент: <b>${row[5]}</b>\n`;
+  msg += `Авто: <b>${lines[0]}</b>\n\n`;
+  
+  msg += `📋 <b>ПОЗИЦИИ:</b>\n`;
+  let total = 0;
+  
+  lines.forEach((line, idx) => {
+    if (idx === 0) return; 
+    if (line.includes('✅')) {
+      const parts = line.split('|').map(p => p.trim());
+      if (parts.length >= 4) {
+        msg += `• ${parts[1]} — ${parts[3]} x ${parts[2]}\n`;
+        const priceNum = parseInt(parts[3].replace(/\D/g, '')) || 0;
+        const qtyNum = parseInt(parts[2].replace(/\D/g, '')) || 1;
+        total += priceNum * qtyNum;
+      }
+    }
+  });
+
+  msg += `\n<b>ИТОГО: ${total.toLocaleString('ru-RU')} руб.</b>`;
+  return msg;
+}
+
+function formatNewOrderMessage(order, b24Result) {
+  let msg = `🔥 <b>НОВЫЙ ЗАКАЗ</b>\n`;
+  msg += `ID: <code>${order.id}</code>\n`;
+  msg += `Клиент: <b>${order.clientName}</b>\n`;
+  msg += `VIN: <code>${order.vin}</code>\n\n`;
+  
+  msg += `📋 <b>ПОЗИЦИИ:</b>\n`;
+  if (order.items) {
+    order.items.forEach(i => msg += `• ${i.name} — ${i.quantity} шт\n`);
   }
+  msg += `\n`;
+  
+  if (b24Result && b24Result.id) {
+    msg += `🚀 <a href="${B24_BASE_URL}/crm/lead/details/${b24Result.id}/">${b24Result.title}</a>`;
+  } else if (b24Result && b24Result.error) {
+    msg += `⚠️ <b>ОШИБКА CRM:</b> <i>${b24Result.error}</i>`;
+  } else {
+    msg += `⚠️ <i>Лид в CRM не создан</i>`;
+  }
+  
+  return msg;
+}
+
+function addLeadWithTg(order) {
+  var carModel = "Авто не указано";
+  if (order.items && order.items.length > 0 && order.items[0].car) { 
+    carModel = order.items[0].car.model || "Модель?"; 
+  }
+  var leadTitleText = carModel + " | " + (order.clientName || "Клиент");
+  var rawTitle = leadTitleText + " | " + (order.vin || "Без VIN");
+  var leadTitleEnc = encodeURIComponent(rawTitle);
+  var clientName = encodeURIComponent(order.clientName || "Неизвестный");
+  var comments = encodeURIComponent("Заказ: " + order.id + "\nVIN: " + (order.vin || "-") + "\nЛокация: " + (order.location || "-"));
+
+  var options = { "method": "get", "validateHttpsCertificates": false, "muteHttpExceptions": true };
+  try {
+    var leadUrl = B24_WEBHOOK_URL + "crm.lead.add?fields[TITLE]=" + leadTitleEnc + "&fields[NAME]=" + clientName + "&fields[COMMENTS]=" + comments + "&fields[STATUS_ID]=NEW&fields[OPENED]=Y"; 
+    var leadResponse = UrlFetchApp.fetch(leadUrl, options);
+    var leadJson = JSON.parse(leadResponse.getContentText());
+    if (!leadJson.result) return { error: leadJson.error_description || "Ошибка Б24" };
+    var newLeadId = leadJson.result;
+
+    if (order.items && order.items.length > 0) {
+      var productParams = "?id=" + newLeadId;
+      for (var i = 0; i < order.items.length; i++) {
+        var item = order.items[i];
+        productParams += "&rows[" + i + "][PRODUCT_NAME]=" + encodeURIComponent(item.name) + "&rows[" + i + "][PRICE]=0&rows[" + i + "][QUANTITY]=" + (item.quantity || 1) + "&rows[" + i + "][CURRENCY_ID]=RUB&rows[" + i + "][PRODUCT_ID]=0";
+      }
+      UrlFetchApp.fetch(B24_WEBHOOK_URL + "crm.lead.productrows.set" + productParams, options);
+    }
+    return { id: newLeadId, title: leadTitleText }; 
+  } catch (e) { return { error: e.toString() }; }
+}
+
+function countOffersForOrder(sheet, parentId) {
+  const data = sheet.getDataRange().getValues();
+  let count = 0;
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][1]) === String(parentId) && data[i][2] === 'OFFER') count++;
+  }
+  return count;
+}
+
+function generateFinalOrderReceipt(car, leaderItems) {
+    let lines = [car ? `${car.model} ${car.year}` : "АВТО"];
+    leaderItems.forEach(item => {
+        const price = item.adminPrice || item.sellerPrice || 0;
+        const sym = (item.adminCurrency === 'USD') ? '$' : '₽';
+        const name = item.AdminName || item.name;
+        lines.push(`✅ | ${name} | ${item.quantity}шт | ${price}${sym}`);
+    });
+    return lines.join('\n');
+}
+
+function generateOrderSummary(items) {
+    return items.map(i => `⬜ | ${i.AdminName || i.name} | ${i.quantity} шт`).join('\n');
+}
+
+function generateOfferSummary(items) {
+    return items.map(i => `${i.rank === 'ЛИДЕР' ? '✅' : '⬜'} | ${i.name} | ${i.quantity} шт`).join('\n');
+}
+
+function findOrderRowById(sheet, id) {
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) { if (String(data[i][0]) === String(id)) return data[i]; }
+  return null;
 }
 
 function updateStatusById(sheet, id, colIndex, value) {
   const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) { if (String(data[i][0]) === String(id)) sheet.getRange(i + 1, colIndex).setValue(value); }
+}
+
+function findBlockEndIndex(sheet, parentId) {
+  const data = sheet.getDataRange().getValues();
+  let lastIndex = -1;
   for (let i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === String(id)) {
-      sheet.getRange(i + 1, colIndex).setValue(value);
+    if (String(data[i][0]) === String(parentId) || String(data[i][1]) === String(parentId)) lastIndex = i + 1;
+    else if (lastIndex !== -1) break; 
+  }
+  return lastIndex === -1 ? sheet.getLastRow() : lastIndex;
+}
+
+function getOrCreateSheet(doc, name, headers) {
+  let s = doc.getSheetByName(name);
+  if (!s) { s = doc.insertSheet(name); s.appendRow(headers); s.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground("#e5e7eb"); s.setFrozenRows(1); }
+  return s;
+}
+
+function formatSheetStyles(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+  sheet.setColumnWidth(9, 300);
+  sheet.getRange(2, 9, lastRow-1, 1).setWrap(true);
+}
+
+function formatRows(sheet) {
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) return;
+  
+  for (let i = 1; i < data.length; i++) {
+    const rowIdx = i + 1;
+    const type = data[i][2];
+    const status = data[i][3];
+    const refusal = data[i][13]; 
+
+    const range = sheet.getRange(rowIdx, 1, 1, 14);
+
+    if (refusal === 'Y') {
+        range.setBackground('#ffebee').setFontColor('#b71c1c');
+    } else if (status === 'ЗАКРЫТ') {
+        range.setBackground('#eeeeee').setFontColor('#999999');
+    } else if (type === 'ORDER' && data[i][11] === 'Y') { 
+        range.setBackground('#e8f5e9');
+    } else if (type === 'OFFER') {
+        range.setBackground('#fffde7');
+    } else {
+        range.setBackground(null).setFontColor(null);
     }
+  }
+}
+
+function handleTelegramUpdate(contents, subSheet) {
+  const msg = contents.message;
+  if (msg && msg.text === '/start') {
+    const chatId = String(msg.chat.id);
+    const data = subSheet.getDataRange().getValues();
+    if (!data.some(r => String(r[0]) === chatId)) subSheet.appendRow([chatId, msg.from.username || 'User', new Date()]);
   }
 }
 
 function broadcastMessage(html, subSheet) {
   if (!subSheet) return;
   const data = subSheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][0]) sendTelegramText(String(data[i][0]), html);
-  }
-}
-
-function sendTelegramText(chatId, text) {
-  const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
-  try {
-    UrlFetchApp.fetch(url, {
-      method: 'post',
-      contentType: 'application/json',
-      payload: JSON.stringify({ chat_id: chatId, text: text, parse_mode: 'HTML', disable_web_page_preview: true }),
+  data.slice(1).forEach(r => {
+    if (r[0]) UrlFetchApp.fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      method: 'post', contentType: 'application/json',
+      payload: JSON.stringify({ chat_id: String(r[0]), text: html, parse_mode: 'HTML', disable_web_page_preview: true }),
       muteHttpExceptions: true
     });
-  } catch(e) {
-    Logger.log("Send Error: " + e.message);
-  }
+  });
 }
 
-function getOrCreateSheet(doc, name, headers) {
-  let s = doc.getSheetByName(name);
-  if (!s) {
-    s = doc.insertSheet(name);
-    s.appendRow(headers);
-    s.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground("#f3f4f6");
-    s.setFrozenRows(1);
-  }
-  return s;
-}
-
-function formatRows(sheet) {
+function response(obj) { return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON); }
+function closeOrderInSheet(sheet, orderId) {
   const data = sheet.getDataRange().getValues();
-  if (data.length <= 1) return;
-  for (let i = 1; i < data.length; i++) {
-    const rowIdx = i + 1;
-    const type = data[i][2];
-    const status = data[i][3];
-    const rank = data[i][8];
-    const processed = data[i][11];
-    const range = sheet.getRange(rowIdx, 1, 1, 12);
-
-    if (status === 'ЗАКРЫТ') {
-      range.setBackground('#eeeeee').setFontColor('#999999');
-    } else if (type === 'ORDER' && processed === 'Y') {
-      range.setBackground('#e8f5e9');
-    } else if (type === 'OFFER') {
-      range.setBackground('#fffde7');
-      const rankCell = sheet.getRange(rowIdx, 9);
-      if (rank === 'ЛИДЕР') {
-        rankCell.setBackground('#c8e6c9').setFontColor('#1b5e20').setFontWeight('bold');
-      } else {
-        rankCell.setBackground('#fff9c4').setFontColor('#fbc02d').setFontWeight('bold');
-      }
-    } else {
-      range.setBackground(null).setFontColor(null);
-    }
-  }
-}
-
-function applyBorders(sheet) {
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return;
-  sheet.getRange(2, 1, lastRow - 1, 12).setBorder(true, true, true, true, true, true, "#cccccc", SpreadsheetApp.BorderStyle.SOLID);
-}
-
-function response(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
-}
-
-function formatNewOrderMessage(order) {
-  return `🔥 <b>НОВЫЙ ЗАКАЗ</b>\nID: <code>${order.id}</code>\nКлиент: <b>${order.clientName}</b>\nVIN: <code>${order.vin}</code>\n\n🌍 <a href="${WEBAPP_URL}">Открыть Маркетплейс</a>`;
-}
-
-function setWebhook() {
-  const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/setWebhook?url=${WEBAPP_URL}`;
-  Logger.log(UrlFetchApp.fetch(url).getContentText());
+  for (let i = 1; i < data.length; i++) { if (String(data[i][0]) === String(orderId) || String(data[i][1]) === String(orderId)) { sheet.getRange(i + 1, 4).setValue('ЗАКРЫТ'); } }
 }

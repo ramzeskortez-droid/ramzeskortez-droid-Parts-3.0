@@ -1,3 +1,4 @@
+
 import { Order, OrderStatus, OrderItem, RowType, Currency } from '../types';
 
 // Default URL provided by configuration
@@ -21,6 +22,7 @@ interface SheetRow {
   location: string; // Col K (10)
   processed: string; // Col L (11) (Y/N)
   readyToBuy?: string; // Col M (12) (Y/N)
+  refusal?: string; // Col N (13) (Y/N) - Cancellation flag
 }
 
 export class SheetService {
@@ -83,8 +85,25 @@ export class SheetService {
 
       rows.forEach(row => {
         let parsedItems: OrderItem[] = [];
+        let clientPhone = undefined;
         try {
-          parsedItems = row.json ? JSON.parse(row.json) : [];
+          const parsed = row.json ? JSON.parse(row.json) : [];
+          // Если это старый формат массива, то это items. Если новый объект с метаданными, надо проверять.
+          // Сейчас мы пишем items напрямую, но добавим clientPhone в объект заказа при создании. 
+          // НО, так как JSON в колонке H это items[], телефон придется хранить отдельно или хакнуть в items?
+          // РЕШЕНИЕ: При создании мы сохраняем items. Мы не меняли структуру JSON на {items:[], phone:...}.
+          // Для простоты будем считать, что phone пока берется из items[0]?.car?.phone если бы мы туда писали, 
+          // но у нас его там нет.
+          // В текущей реализации createOrder мы пишем items.
+          // Чтобы сохранить телефон, нам нужно расширить сохраняемый JSON или использовать свободное поле.
+          // ПОКА мы будем передавать phone в createOrder, и сохранять его внутри items[0] как скрытое поле, 
+          // либо если backend позволяет, писать в отдельное место. 
+          // Поскольку менять GAS скрипт рискованно без полного рефакторинга, 
+          // запишем телефон в items[0].clientPhone для хранения.
+          parsedItems = parsed;
+          if (parsedItems.length > 0 && (parsedItems[0] as any).clientPhone) {
+             clientPhone = (parsedItems[0] as any).clientPhone;
+          }
         } catch (e) {}
 
         if (row.type === 'ORDER') {
@@ -97,6 +116,7 @@ export class SheetService {
             vin: row.vin,
             status: row.status as OrderStatus,
             clientName: row.clientName,
+            clientPhone: clientPhone, // Достаем из JSON
             createdAt: row.createdAt,
             location: row.location,
             visibleToClient: isProcessed ? 'Y' : 'N',
@@ -104,7 +124,8 @@ export class SheetService {
             offers: [],
             car: carDetails,
             isProcessed: isProcessed,
-            readyToBuy: row.readyToBuy === 'Y'
+            readyToBuy: row.readyToBuy === 'Y',
+            isRefused: row.refusal === 'Y'
           });
         } else if (row.type === 'OFFER') {
           offersList.push({ row, items: parsedItems });
@@ -132,8 +153,19 @@ export class SheetService {
       });
 
       const orders = Array.from(ordersMap.values());
-      // Сортировка по времени создания (новые сверху)
-      orders.sort((a, b) => this.safeParseDate(b.createdAt) - this.safeParseDate(a.createdAt));
+      
+      // СОРТИРОВКА:
+      // 1. Processed (Готово) - сверху
+      // 2. Open (В обработке)
+      // 3. Остальные (Закрытые, Отказ) - по дате
+      orders.sort((a, b) => {
+          // Приоритет обработанным (Processed)
+          if (a.isProcessed && !b.isProcessed) return -1;
+          if (!a.isProcessed && b.isProcessed) return 1;
+          
+          // Внутри групп - по дате (новые сверху)
+          return this.safeParseDate(b.createdAt) - this.safeParseDate(a.createdAt);
+      });
 
       this.cache = orders;
       this.lastFetch = Date.now();
@@ -160,8 +192,17 @@ export class SheetService {
     });
   }
 
-  static async createOrder(vin: string, items: any[], clientName: string, car: any): Promise<string> {
+  static async createOrder(vin: string, items: any[], clientName: string, car: any, clientPhone?: string): Promise<string> {
     const orderId = `ORD-${Math.floor(Math.random() * 100000)}`;
+    
+    // Внедряем телефон в первый элемент items для сохранения в JSON
+    const itemsWithPhone = items.map((item, idx) => {
+        if (idx === 0 && clientPhone) {
+            return { ...item, clientPhone, car };
+        }
+        return { ...item, car };
+    });
+
     const payload = {
       action: 'create',
       order: {
@@ -172,7 +213,7 @@ export class SheetService {
         clientName,
         createdAt: new Date().toLocaleString('ru-RU'),
         location: 'РФ',
-        items: items.map(i => ({...i, car})),
+        items: itemsWithPhone,
         visibleToClient: 'N'
       }
     };
@@ -228,6 +269,23 @@ export class SheetService {
     await this.postData({
       action: 'confirm_purchase',
       orderId
+    });
+    this.lastFetch = 0;
+  }
+
+  static async refuseOrder(orderId: string): Promise<void> {
+    await this.postData({
+      action: 'refuse_order',
+      orderId
+    });
+    this.lastFetch = 0;
+  }
+
+  static async updateOrderJson(orderId: string, newItems: any[]): Promise<void> {
+    await this.postData({
+      action: 'update_json',
+      orderId,
+      items: newItems
     });
     this.lastFetch = 0;
   }

@@ -20,6 +20,13 @@ export interface CarDetails {
   year: string;
   engine: string;
   transmission: string;
+  
+  // Admin Overrides
+  AdminModel?: string;
+  AdminBodyType?: string;
+  AdminYear?: string;
+  AdminEngine?: string;
+  AdminTransmission?: string;
 }
 
 export interface OrderItem {
@@ -30,6 +37,13 @@ export interface OrderItem {
   address: string;
   category?: PartCategory;
   refImage?: string;
+  
+  // New: car info attached to item sometimes
+  car?: CarDetails;
+
+  // Admin Overrides for Item
+  AdminName?: string;
+  AdminQuantity?: number;
   
   // Seller side
   sellerPrice?: number;
@@ -56,6 +70,7 @@ export interface Order {
   createdAt: string; 
   location: string;
   clientName: string;
+  clientPhone?: string; // Добавлено поле телефона
   visibleToClient?: 'Y' | 'N';
   offers?: Order[];
   // Добавлено для устранения ошибок Property 'isProcessed' does not exist on type 'Order'
@@ -64,4 +79,6 @@ export interface Order {
   isSentOptimistic?: boolean;
   // Новое поле: подтверждение покупки клиентом
   readyToBuy?: boolean;
+  // Новое поле: отказ/аннулирование (Колонка N)
+  isRefused?: boolean;
 }
