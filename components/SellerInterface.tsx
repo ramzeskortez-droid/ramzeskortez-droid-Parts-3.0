@@ -73,6 +73,13 @@ export const SellerInterface: React.FC = () => {
     const myOffer = getMyOffer(order);
     if (!myOffer) return { label: 'Ожидание', color: 'bg-slate-100 text-slate-500', icon: <Clock size={10}/> };
 
+    // 1. Check for Full Refusal (ОТКАЗ)
+    // If all items in my offer have quantity 0, it is a refusal.
+    const isRefusal = myOffer.items.every(item => (item.offeredQuantity || 0) === 0);
+    if (isRefusal) {
+        return { label: 'ОТКАЗ', color: 'bg-slate-200 text-slate-500 border-slate-300', icon: <Ban size={10}/> };
+    }
+
     if (!order.isProcessed) {
         return { label: 'На проверке', color: 'bg-blue-50 text-blue-600 border-blue-100', icon: <Loader2 size={10} className="animate-spin"/> };
     }
@@ -168,25 +175,35 @@ export const SellerInterface: React.FC = () => {
     return filteredOrders.slice(start, start + itemsPerPage);
   }, [filteredOrders, currentPage, itemsPerPage]);
 
-  const handleSubmitOffer = async (order: Order) => {
+  const isOrderValid = (order: Order) => {
+      return order.items.every(item => {
+          const stateKey = `${order.id}-${item.name}`;
+          const state = editingItems[stateKey];
+          // Если состояние не инициализировано, берем дефолты: price = 0, qty = requestedQty
+          const currentPrice = state ? state.price : 0;
+          const currentQty = state ? state.offeredQty : item.quantity;
+          
+          // Условие валидности:
+          // 1. Позиция отклонена (Qty = 0) -> OK
+          // 2. Позиция в наличии (Price > 0) -> OK
+          return currentQty === 0 || currentPrice > 0;
+      });
+  };
+
+  const handleSubmitOffer = async (order: Order, isRefusal: boolean) => {
     if (order.isProcessed || !sellerName) return;
 
-    // Check partial quantity
-    let hasPartial = false;
-    order.items.forEach(item => {
-        const stateKey = `${order.id}-${item.name}`;
-        const state = editingItems[stateKey];
-        const offeredQty = state ? state.offeredQty : item.quantity;
-        if (offeredQty < item.quantity) hasPartial = true;
-    });
-
-    if (hasPartial) {
-        const confirmPartial = window.confirm("Вы предлагаете неполное количество (или отказали) по одной или нескольким позициям. Отправить предложение?");
-        if (!confirmPartial) return;
+    // Double check valid state just in case
+    if (!isOrderValid(order)) {
+        alert("Пожалуйста, укажите цену для всех позиций или отметьте их как 'Нет в наличии' (кнопка 🚫).");
+        return;
     }
+
+    // REMOVED window.confirm logic. 
+    // If the button is active, we assume the seller knows what they are doing.
     
     setVanishingIds(prev => new Set(prev).add(order.id));
-    setSuccessToast({ message: `Предложение к заказу ${order.id} отправлено`, id: Date.now().toString() });
+    setSuccessToast({ message: isRefusal ? `Отказ от заказа ${order.id} отправлен` : `Предложение к заказу ${order.id} отправлено`, id: Date.now().toString() });
     setTimeout(() => setSuccessToast(null), 3000);
 
     setTimeout(async () => {
@@ -322,6 +339,15 @@ export const SellerInterface: React.FC = () => {
           const isVanishing = vanishingIds.has(order.id);
           const myOffer = getMyOffer(order);
           const isDisabled = order.isProcessed === true;
+          const canSubmit = isOrderValid(order);
+          
+          // Check if all items are refused (qty = 0)
+          const isAllDeclined = order.items.every(item => {
+              const stateKey = `${order.id}-${item.name}`;
+              const state = editingItems[stateKey];
+              const qty = state ? state.offeredQty : item.quantity;
+              return qty === 0;
+          });
           
           // Helper to split Brand/Model
           const fullModel = order.car?.model || 'N/A';
@@ -500,7 +526,14 @@ export const SellerInterface: React.FC = () => {
                       })}
                       {!myOffer && !isDisabled && (
                         <div className="flex justify-end pt-3 border-t border-slate-100">
-                          <button onClick={() => handleSubmitOffer(order)} className="px-8 py-2.5 rounded-xl bg-slate-900 text-white font-black text-[10px] uppercase shadow-lg hover:bg-slate-800 transition-all flex items-center gap-2">Отправить предложение <CheckCircle size={14}/></button>
+                          <button 
+                            disabled={!canSubmit}
+                            onClick={() => handleSubmitOffer(order, isAllDeclined)} 
+                            className={`px-8 py-2.5 rounded-xl font-black text-[10px] uppercase shadow-lg transition-all flex items-center gap-2 ${canSubmit ? (isAllDeclined ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-slate-900 text-white hover:bg-slate-800') : 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'}`}
+                          >
+                              {canSubmit ? (isAllDeclined ? 'Отказаться' : 'Отправить предложение') : 'Заполните цены'} 
+                              {isAllDeclined ? <XCircle size={14}/> : <CheckCircle size={14}/>}
+                          </button>
                         </div>
                       )}
                       {isDisabled && (
