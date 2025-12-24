@@ -1,4 +1,3 @@
-
 import { Order, OrderStatus, OrderItem, RowType, Currency } from '../types';
 
 // Default URL provided by configuration
@@ -161,7 +160,7 @@ export class SheetService {
     });
   }
 
-  static async createOrder(vin: string, items: any[], clientName: string, car: any): Promise<void> {
+  static async createOrder(vin: string, items: any[], clientName: string, car: any): Promise<string> {
     const orderId = `ORD-${Math.floor(Math.random() * 100000)}`;
     const payload = {
       action: 'create',
@@ -180,6 +179,7 @@ export class SheetService {
 
     await this.postData(payload);
     this.lastFetch = 0;
+    return orderId;
   }
 
   static async createOffer(orderId: string, sellerName: string, items: any[], vin: string): Promise<void> {

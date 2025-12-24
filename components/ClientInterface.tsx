@@ -3,7 +3,7 @@ import { SheetService } from '../services/sheetService';
 import { Order, OrderStatus, PartCategory } from '../types';
 import { Pagination } from './Pagination';
 import { 
-  Send, Plus, Trash2, Zap, CheckCircle2, Car, MoreHorizontal, Calculator, Search, Loader2, ChevronDown, ShoppingCart, Archive, UserCircle2, LogOut, ShieldCheck, Phone, X
+  Send, Plus, Trash2, Zap, CheckCircle2, Car, MoreHorizontal, Calculator, Search, Loader2, ChevronDown, ShoppingCart, Archive, UserCircle2, LogOut, ShieldCheck, Phone, X, Calendar, Clock, Hash, Package
 } from 'lucide-react';
 
 // --- DATA CONSTANTS ---
@@ -32,7 +32,7 @@ export const ClientInterface: React.FC = () => {
   
   // UI States
   const [phoneFlash, setPhoneFlash] = useState(false); // State for red flash animation
-
+  
   // Form state
   const [vin, setVin] = useState('');
   const [car, setCar] = useState({ brand: '', model: '', bodyType: '', year: '', engine: '', transmission: '' });
@@ -45,12 +45,14 @@ export const ClientInterface: React.FC = () => {
 
   // Data state
   const [orders, setOrders] = useState<Order[]>([]);
+  const [searchQuery, setSearchQuery] = useState(''); // New search state
   const [activeTab, setActiveTab] = useState<'processed' | 'archive'>('processed');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   
   const [successToast, setSuccessToast] = useState<{message: string, id: string} | null>(null);
   const [isConfirming, setIsConfirming] = useState<string | null>(null);
   const [vanishingIds, setVanishingIds] = useState<Set<string>>(new Set());
+  const [highlightedId, setHighlightedId] = useState<string | null>(null); // For flashing effect
 
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
@@ -58,7 +60,14 @@ export const ClientInterface: React.FC = () => {
   const fetchOrders = async () => {
     try {
       const data = await SheetService.getOrders(true);
-      setOrders(data);
+      
+      // Merge logic: Preserve local optimistic orders if they haven't appeared in backend yet
+      setOrders(prev => {
+         const serverIds = new Set(data.map(o => o.id));
+         const optimisticPending = prev.filter(o => o.id.startsWith('temp-'));
+         // Filter out optimistic ones if we found a match? No, we just blindly show backend data + pending optimistic
+         return [...optimisticPending, ...data];
+      });
     } catch (e) { console.error(e); }
   };
 
@@ -70,7 +79,7 @@ export const ClientInterface: React.FC = () => {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [activeTab]);
+  }, [activeTab, searchQuery]);
 
   // Click outside handler for brand dropdown
   useEffect(() => {
@@ -109,18 +118,16 @@ export const ClientInterface: React.FC = () => {
     const val = e.target.value;
     const digitsOnly = val.replace(/\D/g, '');
 
-    // Если цифр больше 11, значит пользователь пытается ввести лишнее
     if (digitsOnly.length > 11) {
         setPhoneFlash(true);
-        setTimeout(() => setPhoneFlash(false), 300); // 300ms flash
-        return; // Блокируем ввод
+        setTimeout(() => setPhoneFlash(false), 300); 
+        return; 
     }
 
     setTempAuth({...tempAuth, phone: formatPhoneNumber(val)});
   };
 
   const isPhoneValid = (phone: string) => {
-      // +7 (XXX) XXX-XX-XX -> 18 chars
       return phone.length === 18;
   };
 
@@ -158,7 +165,7 @@ export const ClientInterface: React.FC = () => {
     setItems(newItems);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!clientAuth?.name || items.some(i => !i.name)) {
       alert('Заполните названия деталей.');
@@ -180,21 +187,52 @@ export const ClientInterface: React.FC = () => {
         model: `${car.brand} ${car.model}`.trim()
     };
 
-    const tempId = `ORD-TX-${Date.now().toString().slice(-4)}`;
-    const newOrder: any = {
-       id: tempId, vin: vin || 'N/A', clientName: clientAuth.name, car: finalCar, items,
-       status: OrderStatus.OPEN, createdAt: 'Отправка...', offers: [], readyToBuy: false
+    // --- OPTIMISTIC UI LOGIC ---
+    // 1. Create a Temporary ID
+    const tempId = `temp-${Date.now()}`;
+    const createdAtStr = new Date().toLocaleString('ru-RU').split(',')[0]; // Just date
+
+    // 2. Add to local state immediately
+    const optimisticOrder: any = {
+        id: tempId,
+        vin: vin || 'N/A',
+        clientName: clientAuth.name,
+        car: finalCar,
+        items,
+        status: OrderStatus.OPEN,
+        createdAt: new Date().toLocaleString('ru-RU'),
+        offers: [],
+        readyToBuy: false
     };
 
-    setOrders([newOrder, ...orders]);
-    setSuccessToast({ message: `Заказ ${tempId} успешно создан`, id: Date.now().toString() });
-    setTimeout(() => setSuccessToast(null), 3000);
-
+    // Add to top of list
+    setOrders(prev => [optimisticOrder, ...prev]);
+    
+    // Clear Form immediately
     setVin('');
     setCar({ brand: '', model: '', bodyType: '', year: '', engine: '', transmission: '' });
     setItems([{ name: '', quantity: 1, color: '', category: 'Оригинал', refImage: '' }]);
 
-    SheetService.createOrder(vin, items, clientAuth.name, finalCar).then(() => fetchOrders());
+    // 3. Send to API in background
+    try {
+        const realId = await SheetService.createOrder(vin, items, clientAuth.name, finalCar);
+        
+        // 4. Update ID in state when Real ID comes back
+        setOrders(prev => prev.map(o => o.id === tempId ? { ...o, id: realId } : o));
+        
+        // 5. Trigger Success Effects
+        setHighlightedId(realId); // Triggers green flash
+        setSuccessToast({ message: `Заказ ${realId} успешно создан`, id: Date.now().toString() });
+        
+        setTimeout(() => setHighlightedId(null), 2000); // Remove flash class
+        setTimeout(() => setSuccessToast(null), 3000);
+        
+    } catch (err) {
+        console.error("Order creation failed", err);
+        // On error, remove optimistic order
+        setOrders(prev => prev.filter(o => o.id !== tempId));
+        alert("Ошибка при создании заказа. Проверьте интернет.");
+    }
   };
 
   const handleConfirmPurchase = async (orderId: string) => {
@@ -237,9 +275,26 @@ export const ClientInterface: React.FC = () => {
   }, [orders]);
 
   const filteredOrders = useMemo(() => orders.filter(o => {
-    if (activeTab === 'archive') return o.status === OrderStatus.CLOSED || o.readyToBuy;
-    return o.status === OrderStatus.OPEN && !o.readyToBuy;
-  }), [orders, activeTab]);
+    // 1. Tab Filter
+    let inTab = false;
+    if (activeTab === 'archive') inTab = o.status === OrderStatus.CLOSED || o.readyToBuy;
+    else inTab = o.status === OrderStatus.OPEN && !o.readyToBuy;
+    if (!inTab) return false;
+
+    // 2. Search Filter
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    
+    // Search fields: ID, VIN, Car Model
+    if (o.id.toLowerCase().includes(q)) return true;
+    if (o.vin.toLowerCase().includes(q)) return true;
+    if (o.car?.model?.toLowerCase().includes(q)) return true;
+    
+    // Search inside items
+    if (o.items.some(i => i.name.toLowerCase().includes(q))) return true;
+
+    return false;
+  }), [orders, activeTab, searchQuery]);
 
   const paginatedOrders = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
@@ -314,8 +369,6 @@ export const ClientInterface: React.FC = () => {
                     <input 
                       value={tempAuth.phone} 
                       onChange={handlePhoneChange} 
-                      // Логика стилей: если phoneFlash=true, ставим красный бордюр. Иначе обычный.
-                      // Примечание: Убрана постоянная подсветка ошибки (border-red-300), так как кнопка заблокирована.
                       className={`w-full px-4 py-3 bg-slate-50 border rounded-xl font-bold text-sm outline-none transition-all duration-300 ${phoneFlash ? 'border-red-500 bg-red-50' : 'border-slate-200 focus:border-indigo-600'}`} 
                       placeholder="+7 (XXX) XXX-XX-XX" 
                     />
@@ -467,14 +520,28 @@ export const ClientInterface: React.FC = () => {
             <button type="button" onClick={() => setItems([...items, { name: '', quantity: 1, color: '', category: 'Оригинал', refImage: '' }])} className="text-[9px] font-bold text-indigo-600 uppercase hover:underline flex items-center gap-1"><Plus size={10}/> Добавить деталь</button>
           </div>
 
-          <button type="submit" className="w-full py-3 bg-slate-900 text-white rounded-xl font-black uppercase text-[11px] tracking-widest shadow-xl hover:bg-slate-800 active:scale-95 transition-all flex items-center justify-center gap-3">
-             Отправить запрос <Send className="w-4 h-4" />
+          <button 
+            type="submit" 
+            className="w-full py-3 bg-slate-900 text-white rounded-xl font-black uppercase text-[11px] tracking-widest shadow-xl hover:bg-slate-800 active:scale-95 transition-all flex items-center justify-center gap-3"
+          >
+             <Send className="w-4 h-4" /> Отправить запрос
           </button>
         </form>
       </section>
 
       {/* TABS SECTION */}
-      <div className="space-y-2">
+      <div className="space-y-4">
+        {/* SEARCH BAR (Task 4) */}
+        <div className="relative group">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-indigo-500 transition-colors"/>
+            <input 
+                value={searchQuery} 
+                onChange={e => setSearchQuery(e.target.value)} 
+                placeholder="Поиск по VIN, номеру заказа или названию детали..." 
+                className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl text-[10px] font-bold outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all shadow-sm" 
+            />
+        </div>
+
         <div className="flex gap-2 border-b border-slate-200 pb-1">
           <button onClick={() => setActiveTab('processed')} className={`px-2 py-1 text-[10px] font-black uppercase transition-all ${activeTab === 'processed' ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-slate-400'}`}>
             В обработке {counts.processed > 0 && <span className="ml-1 bg-indigo-50 text-indigo-700 px-1.5 rounded-sm">({counts.processed})</span>}
@@ -489,42 +556,79 @@ export const ClientInterface: React.FC = () => {
           {paginatedOrders.map(order => {
             const isExpanded = expandedId === order.id;
             const isVanishing = vanishingIds.has(order.id);
+            const isOptimistic = order.id.startsWith('temp-');
+            const isHighlighted = highlightedId === order.id;
+            
             const visibleOffers = (order.offers || []).filter(off => off.visibleToClient === 'Y');
             const winningItems = visibleOffers.flatMap(off => off.items.filter(i => i.rank === 'ЛИДЕР' || i.rank === 'LEADER'));
             const hasWinning = winningItems.length > 0;
             const totalSum = winningItems.reduce((acc, item) => acc + ((item.adminPrice ?? item.sellerPrice ?? 0) * (item.offeredQuantity || item.quantity)), 0);
             const symbol = getCurrencySymbol(winningItems[0]?.adminCurrency || winningItems[0]?.sellerCurrency || 'RUB');
 
+            const orderDate = order.createdAt ? order.createdAt.split(/[\n,]/)[0] : '';
+            const itemsCount = order.items.length;
+
             const containerStyle = isVanishing 
                 ? "opacity-0 max-h-0 py-0 overflow-hidden" 
-                : isExpanded 
-                    ? 'border-l-indigo-600 ring-1 ring-indigo-600 shadow-xl bg-white relative z-10 rounded-xl my-3' 
-                    : 'hover:bg-slate-50/30 border-l-transparent border-b border-slate-100 last:border-0';
+                : isHighlighted 
+                    ? "bg-emerald-50 border-emerald-200 ring-1 ring-emerald-200"
+                    : isExpanded 
+                        ? 'border-l-indigo-600 ring-1 ring-indigo-600 shadow-xl bg-white relative z-10 rounded-xl my-3' 
+                        : 'hover:bg-slate-50/30 border-l-transparent border-b border-slate-100 last:border-0';
 
             return (
-              <div key={order.id} className={`transition-all duration-500 border-l-4 ${containerStyle}`}>
-                 <div className="p-3 grid grid-cols-[100px_1fr_120px] items-center gap-4 cursor-pointer min-h-[56px]" onClick={() => !isVanishing && setExpandedId(isExpanded ? null : order.id)}>
-                    <div className="flex flex-col justify-center min-w-0">
-                       <span className="font-mono font-bold text-[10px] text-slate-900 truncate block">{order.id}</span>
-                       <span className="text-[8px] font-bold text-slate-400 uppercase leading-none tracking-tight truncate block">{order.vin}</span>
+              <div key={order.id} className={`transition-all duration-700 border-l-4 ${containerStyle}`}>
+                 {/* GRID LAYOUT FOR DESKTOP (Task 8) */}
+                 <div className="p-3 grid grid-cols-[80px_1fr_60px_80px_110px_20px] items-center gap-3 cursor-pointer min-h-[56px]" onClick={() => !isVanishing && !isOptimistic && setExpandedId(isExpanded ? null : order.id)}>
+                    
+                    {/* COL 1: ID / Loader */}
+                    <div className="flex items-center">
+                        {isOptimistic ? (
+                            <div className="flex items-center gap-1.5 text-indigo-500">
+                                <Loader2 size={12} className="animate-spin"/>
+                                <span className="text-[9px] font-bold uppercase tracking-wider">Создание</span>
+                            </div>
+                        ) : (
+                            <div className="flex flex-col">
+                                <span className="font-mono font-bold text-[10px] text-slate-900 truncate block">{order.id}</span>
+                                <span className="text-[8px] font-bold text-slate-400 uppercase leading-none tracking-tight truncate block">{order.vin}</span>
+                            </div>
+                        )}
                     </div>
+
+                    {/* COL 2: CAR MODEL */}
                     <div className="flex flex-col justify-center min-w-0">
                        <span className="font-bold text-[10px] text-slate-700 uppercase leading-none truncate block">{order.car?.model || 'БЕЗ МОДЕЛИ'}</span>
-                       <div className="flex items-center gap-2 mt-1 min-h-[10px]">
-                          <span className="text-[8px] font-bold text-slate-400 uppercase leading-none">{order.items.length} поз.</span>
-                       </div>
                     </div>
-                    <div className="flex items-center justify-end gap-3">
+
+                    {/* COL 3: ITEMS COUNT */}
+                    <div className="flex items-center gap-1">
+                        <Package size={12} className="text-slate-300"/>
+                        <span className="text-[9px] font-bold text-slate-500">{itemsCount} поз.</span>
+                    </div>
+
+                    {/* COL 4: DATE */}
+                    <div className="flex items-center gap-1">
+                        <Calendar size={12} className="text-slate-300"/>
+                        <span className="text-[9px] font-bold text-slate-500">{orderDate}</span>
+                    </div>
+
+                    {/* COL 5: STATUS */}
+                    <div className="flex justify-end">
                         {order.readyToBuy ? (
-                            <span className="px-3 py-1 rounded-full font-black text-[9px] uppercase bg-emerald-600 text-white whitespace-nowrap shadow-sm">КУПЛЕНО</span>
+                            <span className="px-2 py-1 rounded-md font-black text-[8px] uppercase bg-emerald-600 text-white whitespace-nowrap shadow-sm">КУПЛЕНО</span>
                         ) : (
-                            <span className={`px-3 py-1 rounded-full font-bold text-[9px] uppercase whitespace-nowrap shadow-sm ${hasWinning ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>{hasWinning ? 'ГОТОВО' : 'В ОБРАБОТКЕ'}</span>
+                            <span className={`px-2 py-1 rounded-md font-bold text-[8px] uppercase whitespace-nowrap shadow-sm border ${hasWinning ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>{hasWinning ? 'ГОТОВО' : 'В ОБРАБОТКЕ'}</span>
                         )}
-                        <MoreHorizontal size={14} className="text-slate-300" />
+                    </div>
+
+                    {/* COL 6: EXPAND ICON */}
+                    <div className="flex justify-end">
+                         {isOptimistic ? null : <MoreHorizontal size={14} className="text-slate-300" />}
                     </div>
                  </div>
 
-                 {isExpanded && !isVanishing && (
+                 {isExpanded && !isVanishing && !isOptimistic && (
                    <div className="p-4 bg-white border-t border-slate-100 animate-in fade-in duration-200 rounded-b-lg" onClick={e => e.stopPropagation()}>
                       {!hasWinning && (
                           <div className="space-y-3">
@@ -542,7 +646,7 @@ export const ClientInterface: React.FC = () => {
                                                </div>
                                            </div>
                                            <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-50 rounded text-[9px] font-bold text-slate-400 uppercase">
-                                               <Loader2 size={10} className="animate-spin"/> Поиск...
+                                               <Clock size={10} className="text-slate-300"/> В очереди
                                            </div>
                                        </div>
                                    ))}
