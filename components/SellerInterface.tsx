@@ -15,9 +15,14 @@ export const SellerInterface: React.FC = () => {
   const [activeBrandFilter, setActiveBrandFilter] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   
-  const [sellerName, setSellerName] = useState(() => localStorage.getItem('seller_token') || '');
-  const [showTokenModal, setShowTokenModal] = useState(!localStorage.getItem('seller_token'));
-  const [tempToken, setTempToken] = useState('');
+  // New Auth State
+  const [sellerAuth, setSellerAuth] = useState(() => {
+    const saved = localStorage.getItem('seller_auth_data');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [showAuthModal, setShowAuthModal] = useState(!localStorage.getItem('seller_auth_data'));
+  const [tempAuth, setTempAuth] = useState({ name: '', phone: '' });
+  const [phoneFlash, setPhoneFlash] = useState(false);
 
   const [editingItems, setEditingItems] = useState<Record<string, { price: number; currency: Currency; offeredQty: number; refImage: string }>>({});
   const [loading, setLoading] = useState(false);
@@ -32,7 +37,7 @@ export const SellerInterface: React.FC = () => {
   const [itemsPerPage, setItemsPerPage] = useState(10);
 
   const fetchData = async (silent = false) => {
-    if (!sellerName) return;
+    if (!sellerAuth?.name) return;
     if (!silent) setLoading(true);
     
     setIsSyncing(true);
@@ -47,25 +52,82 @@ export const SellerInterface: React.FC = () => {
   };
 
   useEffect(() => {
-    if (sellerName) fetchData();
-    const interval = setInterval(() => sellerName && fetchData(true), 20000);
+    if (sellerAuth) fetchData();
+    const interval = setInterval(() => sellerAuth && fetchData(true), 20000);
     return () => clearInterval(interval);
-  }, [sellerName]);
+  }, [sellerAuth]);
+
+  // Auth Handlers (Identical to ClientInterface logic)
+  const formatPhoneNumber = (value: string) => {
+    let digits = value.replace(/\D/g, '').slice(0, 11);
+    if (!digits) return '';
+    if (digits[0] === '8') digits = '7' + digits.slice(1);
+    else if (digits[0] !== '7') digits = '7' + digits;
+    const match = digits.match(/^(\d{1})(\d{0,3})(\d{0,3})(\d{0,2})(\d{0,2})$/);
+    if (!match) return '+7'; 
+    let formatted = `+${match[1]}`;
+    if (match[2]) formatted += ` (${match[2]}`;
+    if (match[3]) formatted += `) ${match[3]}`;
+    if (match[4]) formatted += `-${match[4]}`;
+    if (match[5]) formatted += `-${match[5]}`;
+    return formatted;
+  };
+
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    const digitsOnly = val.replace(/\D/g, '');
+    if (digitsOnly.length > 11) {
+        setPhoneFlash(true);
+        setTimeout(() => setPhoneFlash(false), 300); 
+        return; 
+    }
+    setTempAuth({...tempAuth, phone: formatPhoneNumber(val)});
+  };
+
+  const isPhoneValid = (phone: string) => phone.length === 18;
+
+  const handleLogin = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!tempAuth.name.trim()) return;
+    if (!isPhoneValid(tempAuth.phone)) return;
+    const authData = { name: tempAuth.name.trim().toUpperCase(), phone: tempAuth.phone.trim() };
+    setSellerAuth(authData);
+    localStorage.setItem('seller_auth_data', JSON.stringify(authData));
+    setShowAuthModal(false);
+    fetchData(false);
+  };
+
+  const handleDemoLogin = (num: 1 | 2) => {
+    const demo = num === 1 
+      ? { name: 'ПОСТАВЩИК 1', phone: '+7 (999) 777-11-11' }
+      : { name: 'ПОСТАВЩИК 2', phone: '+7 (999) 888-22-22' };
+    setSellerAuth(demo);
+    localStorage.setItem('seller_auth_data', JSON.stringify(demo));
+    setShowAuthModal(false);
+    fetchData(false);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('seller_auth_data');
+    setSellerAuth(null);
+    setShowAuthModal(true);
+    setRawOrders([]);
+  };
 
   const handleSearchTrigger = () => {
     setAppliedSearch(searchQuery.toLowerCase().trim());
   };
 
   const getMyOffer = (order: Order) => {
-    if (!sellerName) return null;
-    const nameToMatch = sellerName.trim().toUpperCase();
+    if (!sellerAuth?.name) return null;
+    const nameToMatch = sellerAuth.name.trim().toUpperCase();
     return order.offers?.find(off => 
       String(off.clientName || '').trim().toUpperCase() === nameToMatch
     ) || null;
   };
 
   const hasSentOfferByMe = (order: Order) => {
-    if (!sellerName) return false;
+    if (!sellerAuth) return false;
     return optimisticSentIds.has(order.id) || !!getMyOffer(order);
   };
 
@@ -73,8 +135,6 @@ export const SellerInterface: React.FC = () => {
     const myOffer = getMyOffer(order);
     if (!myOffer) return { label: 'Ожидание', color: 'bg-slate-100 text-slate-500', icon: <Clock size={10}/> };
 
-    // 1. Check for Full Refusal (ОТКАЗ)
-    // If all items in my offer have quantity 0, it is a refusal.
     const isRefusal = myOffer.items.every(item => (item.offeredQuantity || 0) === 0);
     if (isRefusal) {
         return { label: 'ОТКАЗ', color: 'bg-slate-200 text-slate-500 border-slate-300', icon: <Ban size={10}/> };
@@ -138,7 +198,7 @@ export const SellerInterface: React.FC = () => {
   }, [rawOrders]);
 
   const filteredOrders = useMemo(() => {
-    if (!sellerName) return [];
+    if (!sellerAuth) return [];
     return rawOrders.filter(o => {
       const isSentByMe = hasSentOfferByMe(o);
       const isRelevant = activeTab === 'new' 
@@ -157,7 +217,7 @@ export const SellerInterface: React.FC = () => {
       }
       return true;
     });
-  }, [rawOrders, appliedSearch, activeTab, sellerName, optimisticSentIds, activeBrandFilter]);
+  }, [rawOrders, appliedSearch, activeTab, sellerAuth, optimisticSentIds, activeBrandFilter]);
 
   const availableBrands = useMemo(() => {
       const brands = new Set<string>();
@@ -168,7 +228,7 @@ export const SellerInterface: React.FC = () => {
           }
       });
       return Array.from(brands).sort();
-  }, [rawOrders, sellerName, optimisticSentIds]);
+  }, [rawOrders, sellerAuth, optimisticSentIds]);
 
   const paginatedOrders = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
@@ -179,21 +239,15 @@ export const SellerInterface: React.FC = () => {
       return order.items.every(item => {
           const stateKey = `${order.id}-${item.name}`;
           const state = editingItems[stateKey];
-          // Если состояние не инициализировано, берем дефолты: price = 0, qty = requestedQty
           const currentPrice = state ? state.price : 0;
           const currentQty = state ? state.offeredQty : item.quantity;
-          
-          // Условие валидности:
-          // 1. Позиция отклонена (Qty = 0) -> OK
-          // 2. Позиция в наличии (Price > 0) -> OK
           return currentQty === 0 || currentPrice > 0;
       });
   };
 
   const handleSubmitOffer = async (order: Order, isRefusal: boolean) => {
-    if (order.isProcessed || !sellerName) return;
+    if (order.isProcessed || !sellerAuth) return;
 
-    // Double check valid state just in case
     if (!isOrderValid(order)) {
         alert("Пожалуйста, укажите цену для всех позиций или отметьте их как 'Нет в наличии' (кнопка 🚫).");
         return;
@@ -213,22 +267,12 @@ export const SellerInterface: React.FC = () => {
           return { ...item, sellerPrice: state.price, sellerCurrency: state.currency, offeredQuantity: state.offeredQty, refImage: state.refImage, available: state.offeredQty > 0 };
         });
         try {
-          await SheetService.createOffer(order.id, sellerName, finalItems, order.vin);
+          await SheetService.createOffer(order.id, sellerAuth.name, finalItems, order.vin);
           fetchData(true);
         } catch (err) {
           setOptimisticSentIds(prev => { const n = new Set(prev); n.delete(order.id); return n; });
         }
     }, 600);
-  };
-
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!tempToken.trim()) return;
-    const name = tempToken.trim().toUpperCase();
-    setSellerName(name);
-    localStorage.setItem('seller_token', name);
-    setShowTokenModal(false);
-    fetchData(false);
   };
 
   return (
@@ -242,21 +286,22 @@ export const SellerInterface: React.FC = () => {
           </div>
       )}
 
-      {showTokenModal && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/60 backdrop-blur-md p-4 animate-in fade-in duration-300">
-          <form onSubmit={handleLogin} className="bg-white rounded-[2rem] p-8 w-full max-w-[340px] shadow-2xl flex flex-col items-center gap-6 animate-in zoom-in-95 duration-300">
-             <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-indigo-200">
-                <ShieldCheck size={32} />
+      {showAuthModal && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-900/70 backdrop-blur-md p-4 animate-in fade-in duration-300">
+          <div className="bg-white rounded-[2.5rem] p-8 w-full max-w-[400px] shadow-2xl flex flex-col items-center gap-6 animate-in zoom-in-95 duration-300">
+             <div className="w-20 h-20 bg-indigo-600 rounded-3xl flex items-center justify-center text-white shadow-xl shadow-indigo-100"><ShieldCheck size={40} /></div>
+             <div className="text-center space-y-1"><h2 className="text-xl font-black uppercase text-slate-900 tracking-tight">Вход поставщика</h2><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Авторизуйтесь для работы</p></div>
+             <div className="grid grid-cols-2 gap-3 w-full">
+                <button onClick={() => handleDemoLogin(1)} className="py-3 bg-slate-50 border border-slate-200 rounded-2xl text-[10px] font-black uppercase text-slate-600 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-600 transition-all flex flex-col items-center gap-1"><UserCircle2 size={16}/> Демо Поставщик 1</button>
+                <button onClick={() => handleDemoLogin(2)} className="py-3 bg-slate-50 border border-slate-200 rounded-2xl text-[10px] font-black uppercase text-slate-600 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-600 transition-all flex flex-col items-center gap-1"><UserCircle2 size={16}/> Демо Поставщик 2</button>
              </div>
-             <div className="text-center space-y-2">
-                <h2 className="text-lg font-black uppercase text-slate-900 tracking-tight">Вход поставщика</h2>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Введите название фирмы</p>
-             </div>
-             <div className="w-full space-y-3">
-                 <input autoFocus value={tempToken} onChange={e => setTempToken(e.target.value)} className="w-full px-4 py-3 bg-white border-2 border-indigo-100 rounded-xl font-bold text-center text-sm outline-none focus:border-indigo-600 uppercase" placeholder="НАЗВАНИЕ ФИРМЫ" />
-                 <button type="submit" className="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-black text-[11px] uppercase tracking-widest shadow-xl hover:bg-indigo-700 active:scale-95 transition-all">Войти</button>
-             </div>
-          </form>
+             <div className="w-full flex items-center gap-4 py-2"><div className="flex-grow h-px bg-slate-100"></div><span className="text-[9px] font-bold text-slate-300 uppercase">или</span><div className="flex-grow h-px bg-slate-100"></div></div>
+             <form onSubmit={handleLogin} className="w-full space-y-3">
+                 <div className="space-y-1"><label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Название Компании</label><input autoFocus value={tempAuth.name} onChange={e => setTempAuth({...tempAuth, name: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-indigo-600 uppercase" placeholder="ООО АВТО" /></div>
+                 <div className="space-y-1"><label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Номер телефона</label><input value={tempAuth.phone} onChange={handlePhoneChange} className={`w-full px-4 py-3 bg-slate-50 border rounded-xl font-bold text-sm outline-none transition-all duration-300 ${phoneFlash ? 'border-red-500 bg-red-50' : 'border-slate-200 focus:border-indigo-600'}`} placeholder="+7 (XXX) XXX-XX-XX" /></div>
+                 <button type="submit" disabled={!tempAuth.name || !isPhoneValid(tempAuth.phone)} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl hover:bg-indigo-700 active:scale-95 transition-all mt-4 disabled:opacity-50 disabled:active:scale-100">Войти</button>
+             </form>
+          </div>
         </div>
       )}
 
@@ -266,13 +311,16 @@ export const SellerInterface: React.FC = () => {
             <span className="text-lg font-black text-slate-900 uppercase tracking-tight">Личный кабинет</span>
          </div>
          <div className="flex items-center gap-3 w-full sm:w-auto">
-             {sellerName && (
-                 <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg shadow-sm">
-                    <UserCircle2 size={16} className="text-indigo-600"/>
-                    <span className="text-[10px] font-black uppercase text-slate-700 tracking-tight">{sellerName}</span>
+             {sellerAuth?.name && (
+                 <div className="flex flex-col items-end gap-0.5">
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg shadow-sm">
+                        <UserCircle2 size={16} className="text-indigo-600"/>
+                        <span className="text-[10px] font-black uppercase text-slate-700 tracking-tight">{sellerAuth.name}</span>
+                    </div>
+                    <span className="text-[9px] font-bold text-slate-400">{sellerAuth.phone}</span>
                  </div>
              )}
-             <button onClick={() => { localStorage.removeItem('seller_token'); setSellerName(''); setShowTokenModal(true); setOptimisticSentIds(new Set()); }} className="p-2 bg-slate-50 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-lg transition-colors border border-transparent hover:border-red-100 ml-auto sm:ml-0">
+             <button onClick={handleLogout} className="p-2 bg-slate-50 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-lg transition-colors border border-transparent hover:border-red-100 ml-auto sm:ml-0">
                 <LogOut size={18}/>
              </button>
          </div>

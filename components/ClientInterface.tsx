@@ -46,8 +46,8 @@ export const ClientInterface: React.FC = () => {
   
   const [successToast, setSuccessToast] = useState<{message: string, id: string} | null>(null);
   const [isConfirming, setIsConfirming] = useState<string | null>(null);
-  // NEW: State for "Refuse" confirmation mode (key = orderId)
-  const [refuseConfirmMode, setRefuseConfirmMode] = useState<string | null>(null); 
+
+  const [refuseModalOrder, setRefuseModalOrder] = useState<Order | null>(null);
   
   const [vanishingIds, setVanishingIds] = useState<Set<string>>(new Set());
   const [highlightedId, setHighlightedId] = useState<string | null>(null); 
@@ -59,19 +59,29 @@ export const ClientInterface: React.FC = () => {
     setIsSyncing(true);
     try {
       const data = await SheetService.getOrders(true);
+      
+      // TASK EXTRA 2: Client Isolation
+      // Only show orders belonging to this client
+      const myOrders = clientAuth?.name 
+        ? data.filter(o => o.clientName === clientAuth.name)
+        : [];
+
       setOrders(prev => {
          const optimisticPending = prev.filter(o => o.id.startsWith('temp-'));
-         return [...optimisticPending, ...data];
+         // Combine optimistic (local) + fetched (server)
+         return [...optimisticPending, ...myOrders];
       });
     } catch (e) { console.error(e); }
     finally { setIsSyncing(false); }
   };
 
   useEffect(() => { 
-    fetchOrders(); 
-    const interval = setInterval(() => fetchOrders(), 15000);
-    return () => clearInterval(interval);
-  }, []);
+    if (clientAuth) {
+        fetchOrders(); 
+        const interval = setInterval(() => fetchOrders(), 15000);
+        return () => clearInterval(interval);
+    }
+  }, [clientAuth]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -138,6 +148,7 @@ export const ClientInterface: React.FC = () => {
   const handleLogout = () => {
     localStorage.removeItem('client_auth');
     setClientAuth(null);
+    setOrders([]); // Clear data on logout
     setShowAuthModal(true);
   };
 
@@ -207,22 +218,17 @@ export const ClientInterface: React.FC = () => {
     }
   };
 
-  const handleRefuseOrder = async (e: React.MouseEvent, orderId: string) => {
+  const openRefuseModal = (e: React.MouseEvent, order: Order) => {
     e.stopPropagation();
-    
-    // First Click: Activate Confirmation Mode
-    if (refuseConfirmMode !== orderId) {
-        setRefuseConfirmMode(orderId);
-        // Auto-cancel confirmation mode after 3 seconds if not clicked
-        setTimeout(() => {
-            setRefuseConfirmMode(prev => prev === orderId ? null : prev);
-        }, 3000);
-        return;
-    }
+    setRefuseModalOrder(order);
+  };
 
-    // Second Click: Execute Refusal
-    setRefuseConfirmMode(null);
+  const confirmRefusal = async () => {
+    if (!refuseModalOrder) return;
+    const orderId = refuseModalOrder.id;
+    
     setIsConfirming(orderId);
+    setRefuseModalOrder(null);
     
     try {
       await SheetService.refuseOrder(orderId);
@@ -300,12 +306,33 @@ export const ClientInterface: React.FC = () => {
   }, [car.brand]);
 
   return (
-    <div className="max-w-4xl mx-auto p-4 space-y-4">
+    <div className="max-w-4xl mx-auto p-4 space-y-4 relative">
       {successToast && (
           <div className="fixed top-6 right-6 z-[250] animate-in slide-in-from-top-4 fade-in duration-300">
               <div className="bg-slate-900 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 border border-slate-700">
                   <CheckCircle2 className="text-emerald-400" size={20} />
                   <div><p className="text-[10px] font-black uppercase tracking-widest text-emerald-400">Успешно</p><p className="text-xs font-bold">{successToast.message}</p></div>
+              </div>
+          </div>
+      )}
+
+      {/* CONFIRMATION MODAL */}
+      {refuseModalOrder && (
+          <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200" onClick={() => setRefuseModalOrder(null)}>
+              <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                  <div className="flex flex-col items-center gap-4 text-center">
+                      <div className="w-12 h-12 rounded-full bg-red-50 text-red-500 flex items-center justify-center">
+                          <AlertCircle size={24}/>
+                      </div>
+                      <div>
+                          <h3 className="text-lg font-black uppercase text-slate-900">Отказаться от заказа?</h3>
+                          <p className="text-xs text-slate-500 font-bold mt-1">Это действие отменит заказ {refuseModalOrder.id}. Восстановить его будет нельзя.</p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 w-full mt-2">
+                          <button onClick={() => setRefuseModalOrder(null)} className="py-3 rounded-xl bg-slate-100 text-slate-600 font-bold text-xs uppercase hover:bg-slate-200 transition-colors">Нет, вернуться</button>
+                          <button onClick={confirmRefusal} className="py-3 rounded-xl bg-red-600 text-white font-black text-xs uppercase hover:bg-red-700 transition-colors shadow-lg shadow-red-200">Да, отказаться</button>
+                      </div>
+                  </div>
               </div>
           </div>
       )}
@@ -406,9 +433,6 @@ export const ClientInterface: React.FC = () => {
             
             const containerStyle = isVanishing ? "opacity-0 max-h-0 py-0 overflow-hidden" : isHighlighted ? "bg-emerald-50 border-emerald-200 ring-1 ring-emerald-200" : order.isRefused ? "bg-red-50 border-red-200 opacity-60 grayscale-[0.5]" : isExpanded ? 'border-l-indigo-600 ring-1 ring-indigo-600 shadow-xl bg-white relative z-10 rounded-xl my-3' : 'hover:bg-slate-50/30 border-l-transparent border-b border-slate-100 last:border-0';
 
-            // Check if this specific order is in "Refuse Confirmation" mode
-            const isConfirmingRefusal = refuseConfirmMode === order.id;
-
             return (
               <div key={order.id} className={`transition-all duration-700 border-l-4 ${containerStyle}`}>
                  <div className="p-3 grid grid-cols-[80px_1fr_60px_80px_110px_20px] items-center gap-3 cursor-pointer min-h-[56px]" onClick={() => !isVanishing && !isOptimistic && setExpandedId(isExpanded ? null : order.id)}>
@@ -416,7 +440,7 @@ export const ClientInterface: React.FC = () => {
                     <div className="flex flex-col justify-center min-w-0"><span className="font-bold text-[10px] text-slate-700 uppercase leading-none truncate block">{displayModel}</span></div>
                     <div className="flex items-center gap-1"><Package size={12} className="text-slate-300"/><span className="text-[9px] font-bold text-slate-500">{itemsCount} поз.</span></div>
                     <div className="flex items-center gap-1"><Calendar size={12} className="text-slate-300"/><span className="text-[9px] font-bold text-slate-500">{orderDate}</span></div>
-                    <div className="flex justify-end">{order.isRefused ? (<span className="px-2 py-1 rounded-md font-black text-[8px] uppercase bg-red-100 text-red-600 whitespace-nowrap shadow-sm flex items-center gap-1"><Ban size={10}/> ОТМЕНЕН</span>) : order.readyToBuy ? (<span className="px-2 py-1 rounded-md font-black text-[8px] uppercase bg-emerald-600 text-white whitespace-nowrap shadow-sm">КУПЛЕНО</span>) : (<span className={`px-2 py-1 rounded-md font-bold text-[8px] uppercase whitespace-nowrap shadow-sm border ${hasWinning ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>{hasWinning ? 'ГОТОВО' : 'В ОБРАБОТКЕ'}</span>)}</div>
+                    <div className="flex justify-end">{order.isRefused ? (<span className="px-2 py-1 rounded-md font-black text-[8px] uppercase bg-red-100 text-red-600 whitespace-nowrap shadow-sm flex items-center gap-1"><Ban size={10}/> АННУЛИРОВАН</span>) : order.readyToBuy ? (<span className="px-2 py-1 rounded-md font-black text-[8px] uppercase bg-emerald-600 text-white whitespace-nowrap shadow-sm">КУПЛЕНО</span>) : (<span className={`px-2 py-1 rounded-md font-bold text-[8px] uppercase whitespace-nowrap shadow-sm border ${hasWinning ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>{hasWinning ? 'ГОТОВО' : 'В ОБРАБОТКЕ'}</span>)}</div>
                     <div className="flex justify-end">{isOptimistic ? null : <MoreHorizontal size={14} className="text-slate-300" />}</div>
                  </div>
 
@@ -453,14 +477,14 @@ export const ClientInterface: React.FC = () => {
                                     <div className="flex gap-2 w-full md:w-auto">
                                         <button 
                                             type="button" 
-                                            onClick={(e) => handleRefuseOrder(e, order.id)} 
-                                            className={`flex-1 md:flex-none px-4 py-2.5 rounded-xl font-bold text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95 ${isConfirmingRefusal ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-slate-700 text-slate-300 hover:bg-red-600 hover:text-white'}`}
+                                            onClick={(e) => openRefuseModal(e, order)} 
+                                            className="flex-1 md:flex-none px-4 py-2.5 rounded-xl font-bold text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95 bg-slate-700 text-slate-300 hover:bg-red-600 hover:text-white"
                                         >
-                                            {isConfirmingRefusal ? <><AlertCircle size={14}/> Подтвердить?</> : <><X size={14}/> Отказаться</>}
+                                            <X size={14}/> Отказаться
                                         </button>
-                                        <button onClick={() => handleConfirmPurchase(order.id)} disabled={!!isConfirming || !!isConfirmingRefusal} className="flex-[2] md:flex-none px-6 py-2.5 bg-emerald-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95 disabled:opacity-50">{isConfirming === order.id ? <Loader2 size={14} className="animate-spin"/> : <ShoppingCart size={14}/>} Готов купить</button>
+                                        <button onClick={() => handleConfirmPurchase(order.id)} disabled={!!isConfirming} className="flex-[2] md:flex-none px-6 py-2.5 bg-emerald-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95 disabled:opacity-50">{isConfirming === order.id ? <Loader2 size={14} className="animate-spin"/> : <ShoppingCart size={14}/>} Готов купить</button>
                                     </div>
-                                  ) : (<div className={`flex items-center gap-2 px-4 py-2 rounded-lg border ${order.isRefused ? 'bg-red-500/20 border-red-500/30 text-red-400' : 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400'}`}>{order.isRefused ? <Ban size={14}/> : <Archive size={14}/>}<span className="text-[9px] font-black uppercase">{order.isRefused ? 'Заказ отменен' : 'В Архиве (Оплачено)'}</span></div>)}
+                                  ) : (<div className={`flex items-center gap-2 px-4 py-2 rounded-lg border ${order.isRefused ? 'bg-red-500/20 border-red-500/30 text-red-400' : 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400'}`}>{order.isRefused ? <Ban size={14}/> : <Archive size={14}/>}<span className="text-[9px] font-black uppercase">{order.isRefused ? 'АННУЛИРОВАН' : 'В Архиве (Оплачено)'}</span></div>)}
                               </div>
                            </div>
                         </div>

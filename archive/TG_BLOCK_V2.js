@@ -28,7 +28,7 @@ function doGet(e) {
       createdAt: r[9], location: r[10], processed: r[11], readyToBuy: r[12], refusal: r[13]
     })));
   }
-  return response({status: "alive", version: "4.3.0-strict-leaders-propagation"});
+  return response({status: "alive", version: "4.6.0-fix-annul"});
 }
 
 /**
@@ -38,7 +38,7 @@ function doPost(e) {
   if (!e || !e.postData) return response({error: "No post data"});
   
   const lock = LockService.getScriptLock();
-  const hasLock = lock.tryLock(30000); // Increased lock time for safety
+  const hasLock = lock.tryLock(30000); 
   
   try {
     const contents = JSON.parse(e.postData.contents);
@@ -100,11 +100,20 @@ function doPost(e) {
       }
     }
     else if (body.action === 'refuse_order') {
-       updateStatusById(sheet, body.orderId, 14, 'Y'); // Col N
-       closeOrderInSheet(sheet, body.orderId);
+       // ОТКАЗ: Ставим галочку в 14-й колонке (N)
+       updateStatusById(sheet, body.orderId, 14, 'Y'); 
+       // ЗАКРЫТ: Ставим статус в 4-й колонке (D)
+       updateStatusById(sheet, body.orderId, 4, 'ЗАКРЫТ');
+       
+       const orderRow = findOrderRowById(sheet, body.orderId);
+       if (orderRow) {
+         const subSheet = doc.getSheetByName('Subscribers');
+         const allOffers = getAllOffersForOrder(sheet, body.orderId);
+         const message = formatRefusalMessage(body.orderId, orderRow, allOffers);
+         broadcastMessage(message, subSheet);
+       }
     }
     else if (body.action === 'update_json') {
-       // 1. Обновляем сам Заказ
        const newJson = JSON.stringify(body.items);
        updateStatusById(sheet, body.orderId, 8, newJson);
        
@@ -113,10 +122,9 @@ function doPost(e) {
          return `${name} (${i.quantity} шт)`;
        }).join(', ');
        updateStatusById(sheet, body.orderId, 7, summary);
-       updateStatusById(sheet, body.orderId, 9, generateOrderSummary(body.items));
-
-       // 2. Распространяем изменения (AdminName, car) на все ОФФЕРЫ этого заказа
+       
        propagateEditsToOffers(sheet, body.orderId, body.items);
+       recalculateSummaryOrReceipt(sheet, body.orderId, body.items);
     }
     else if (body.action === 'close_order') {
       closeOrderInSheet(sheet, body.orderId);
@@ -135,24 +143,53 @@ function doPost(e) {
   }
 }
 
-// === ЛОГИКА СИНХРОНИЗАЦИИ ПРАВОК ===
+function recalculateSummaryOrReceipt(sheet, orderId, orderItems) {
+    const data = sheet.getDataRange().getValues();
+    const allLeaderItems = [];
+    
+    let orderRowIndex = -1;
+    for (let i = 1; i < data.length; i++) {
+        if (String(data[i][0]) === String(orderId)) {
+            orderRowIndex = i;
+            break;
+        }
+    }
+    if (orderRowIndex === -1) return;
+
+    for (let i = 1; i < data.length; i++) {
+        if (String(data[i][1]) === String(orderId) && data[i][2] === 'OFFER') {
+            try {
+                let oItems = JSON.parse(data[i][7] || '[]');
+                oItems.forEach(item => {
+                    if (item.rank === 'ЛИДЕР') allLeaderItems.push(item);
+                });
+            } catch(e) {}
+        }
+    }
+
+    if (allLeaderItems.length > 0) {
+        let carInfo = null;
+        if (orderItems.length > 0) carInfo = orderItems[0].car;
+        sheet.getRange(orderRowIndex + 1, 9).setValue(generateFinalOrderReceipt(carInfo, allLeaderItems));
+    } else {
+        sheet.getRange(orderRowIndex + 1, 9).setValue(generateOrderSummary(orderItems));
+    }
+}
+
 function propagateEditsToOffers(sheet, orderId, newOrderItems) {
     const data = sheet.getDataRange().getValues();
-    
-    // Создаем карту: Оригинальное Имя (lower) -> Объект с новыми данными
     const overrideMap = {};
     newOrderItems.forEach(i => {
         if (i.name) {
             overrideMap[i.name.trim().toLowerCase()] = {
                 AdminName: i.AdminName,
                 AdminQuantity: i.AdminQuantity,
-                car: i.car // Копируем весь объект авто
+                car: i.car
             };
         }
     });
 
     for (let i = 1; i < data.length; i++) {
-        // Ищем офферы, привязанные к этому заказу
         if (String(data[i][1]) === String(orderId) && data[i][2] === 'OFFER') {
             let items = [];
             try { items = JSON.parse(data[i][7] || '[]'); } catch(e) {}
@@ -162,39 +199,25 @@ function propagateEditsToOffers(sheet, orderId, newOrderItems) {
                 const key = item.name.trim().toLowerCase();
                 if (overrideMap[key]) {
                     const updates = overrideMap[key];
-                    // Применяем изменения, если они есть
-                    if (updates.AdminName && item.AdminName !== updates.AdminName) {
-                        item.AdminName = updates.AdminName;
-                        changed = true;
-                    }
-                    if (updates.AdminQuantity && item.AdminQuantity !== updates.AdminQuantity) {
-                        item.AdminQuantity = updates.AdminQuantity;
-                        changed = true;
-                    }
-                    if (updates.car) {
-                        item.car = updates.car;
-                        changed = true;
-                    }
+                    if (updates.AdminName && item.AdminName !== updates.AdminName) { item.AdminName = updates.AdminName; changed = true; }
+                    if (updates.AdminQuantity && item.AdminQuantity !== updates.AdminQuantity) { item.AdminQuantity = updates.AdminQuantity; changed = true; }
+                    if (updates.car) { item.car = updates.car; changed = true; }
                 }
                 return item;
             });
 
             if (changed) {
-                // Сохраняем обновленный JSON оффера
                 sheet.getRange(i + 1, 8).setValue(JSON.stringify(items));
-                // Обновляем читаемую сводку
                 sheet.getRange(i + 1, 9).setValue(generateOfferSummary(items));
             }
         }
     }
 }
 
-// === ЛОГИКА ЛИДЕРОВ (STRICT MODE) ===
 function handleRankUpdate(sheet, body) {
   const { vin, detailName, leadOfferId, adminPrice, adminCurrency } = body;
   const data = sheet.getDataRange().getValues();
   
-  // 1. Находим ParentID по OfferID
   let parentId = null;
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][0]) === String(leadOfferId)) {
@@ -204,7 +227,6 @@ function handleRankUpdate(sheet, body) {
   }
   if (!parentId) return;
 
-  // 2. Ищем строку самого Заказа (для обновления итогового чека)
   let orderRowIndex = -1;
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][0]) === String(parentId)) {
@@ -215,8 +237,6 @@ function handleRankUpdate(sheet, body) {
 
   const targetNameLower = detailName.trim().toLowerCase();
 
-  // 3. ПРОХОДИМ ПО ВСЕМ СТРОКАМ ОФФЕРОВ ЭТОГО ЗАКАЗА
-  // Цель: Найти все упоминания этой детали и СБРОСИТЬ их в РЕЗЕРВ, кроме выбранного OfferID.
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][1]) === String(parentId) && data[i][2] === 'OFFER') {
         let items = [];
@@ -224,22 +244,16 @@ function handleRankUpdate(sheet, body) {
         
         let changed = false;
         items = items.map(item => {
-            // Проверяем, совпадает ли деталь (по name или AdminName)
             const n = item.AdminName || item.name;
             const match = n.trim().toLowerCase() === targetNameLower || item.name.trim().toLowerCase() === targetNameLower;
             
             if (match) {
-                // Если это строка ТОГО САМОГО оффера, который мы выбрали
                 if (String(data[i][0]) === String(leadOfferId)) {
-                    // Ставим ЛИДЕР (только если еще не стоит или цена поменялась)
-                    // Мы всегда перезаписываем, чтобы гарантировать актуальность цены
                     item.rank = 'ЛИДЕР';
                     if (adminPrice !== undefined) item.adminPrice = adminPrice;
                     if (adminCurrency !== undefined) item.adminCurrency = adminCurrency;
                     changed = true;
                 } else {
-                    // Это ОФФЕР-КОНКУРЕНТ по этой же детали -> СБРАСЫВАЕМ В РЕЗЕРВ
-                    // Сбрасываем только если был ЛИДЕР
                     if (item.rank === 'ЛИДЕР') {
                         item.rank = 'РЕЗЕРВ';
                         changed = true;
@@ -256,10 +270,9 @@ function handleRankUpdate(sheet, body) {
     }
   }
   
-  // 4. Генерируем финальный чек для Заказа на основе обновленных данных
   const allLeaderItems = [];
   let carInfo = null;
-  const freshData = sheet.getDataRange().getValues(); // Читаем заново, т.к. мы обновили JSON-ы
+  const freshData = sheet.getDataRange().getValues();
   
   for (let i = 1; i < freshData.length; i++) {
       if (String(freshData[i][1]) === String(parentId) && freshData[i][2] === 'OFFER') {
@@ -281,9 +294,64 @@ function handleRankUpdate(sheet, body) {
   }
 }
 
-/**
- * ФОРМАТ КП ДЛЯ ТЕЛЕГРАМА (РАСШИРЕННЫЙ)
- */
+function formatRefusalMessage(orderId, row, allOffers) {
+  const clientName = row[5];
+  let carStr = "Не указано";
+  let itemsList = "";
+  try {
+      const json = JSON.parse(row[7]);
+      const car = json[0]?.car;
+      if (car) {
+          const model = car.AdminModel || car.model || '';
+          const year = car.AdminYear || car.year || '';
+          carStr = `${model} ${year}`.trim();
+      }
+      if (json && json.length > 0) {
+          json.forEach(item => {
+              itemsList += `• ${item.AdminName || item.name} — ${item.quantity} шт\n`;
+          });
+      }
+  } catch(e) {}
+
+  let totalLost = 0;
+  allOffers.forEach(off => {
+      off.items.forEach(item => {
+          if (item.rank === 'ЛИДЕР') {
+              const price = item.adminPrice || item.sellerPrice || 0;
+              const qty = item.AdminQuantity || item.offeredQuantity || item.quantity || 1;
+              totalLost += (price * qty);
+          }
+      });
+  });
+
+  let msg = `❌ <b>КЛИЕНТ ОТКАЗАЛСЯ</b>\n`;
+  msg += `Заказ: <code>${orderId}</code>\n`;
+  msg += `Клиент: <b>${clientName}</b>\n`;
+  msg += `Авто: <b>${carStr}</b>\n`;
+  if (totalLost > 0) {
+      msg += `Сумма: <b>${totalLost.toLocaleString()} руб.</b>\n`;
+  }
+  if (itemsList) {
+      msg += `\n📋 <b>ПОЗИЦИИ:</b>\n${itemsList}`;
+  }
+  msg += `\n🔗 <a href="${B24_BASE_URL}/crm/lead/list/">Открыть список лидов CRM</a>`;
+  return msg;
+}
+
+function getAllOffersForOrder(sheet, orderId) {
+    const data = sheet.getDataRange().getValues();
+    const offers = [];
+    for (let i = 1; i < data.length; i++) {
+        if (String(data[i][1]) === String(orderId) && data[i][2] === 'OFFER') {
+            try {
+                const items = JSON.parse(data[i][7]);
+                offers.push({ items });
+            } catch(e) {}
+        }
+    }
+    return offers;
+}
+
 function formatCPMessage(orderId, row) {
   const details = String(row[8] || '');
   const lines = details.split('\n');
@@ -291,19 +359,33 @@ function formatCPMessage(orderId, row) {
   let msg = `✅ <b>КП СФОРМИРОВАНО</b>\n`;
   msg += `Заказ: <code>${orderId}</code>\n`;
   msg += `Имя клиента: <b>${row[5]}</b>\n`;
-  msg += `<b>${lines[0]}</b>\n\n`;
+  
+  // Безопасное чтение авто (строка 0)
+  const carLine = lines.length > 0 ? lines[0] : "Авто не указано";
+  msg += `<b>${carLine}</b>\n\n`;
   
   msg += `📋 <b>ПОЗИЦИИ:</b>\n`;
   
+  // Добавлена защита от пустых строк и некорректного формата
+  let hasItems = false;
   lines.forEach((line, idx) => {
     if (idx === 0) return; 
     if (line.includes('✅')) {
       const parts = line.split('|').map(p => p.trim());
-      if (parts.length >= 4) {
-        msg += `• ${parts[1]} — ${parts[3]} x ${parts[2]}\n`;
+      // Ожидаем: [0]✅, [1]Name, [2]Qty, [3]Price
+      if (parts.length >= 3) { // Хотя бы имя и кол-во
+        const name = parts[1] || 'Деталь';
+        const price = parts[3] || 'Цена не указана';
+        const qty = parts[2] || '1 шт';
+        msg += `• ${name} — ${price} x ${qty}\n`;
+        hasItems = true;
       }
     }
   });
+
+  if (!hasItems) {
+      msg += `(Нет утвержденных позиций)\n`;
+  }
 
   return msg;
 }
@@ -315,7 +397,8 @@ function formatPurchaseConfirmationMessage(orderId, row) {
   let msg = `🛍 <b>КЛИЕНТ ГОТОВ КУПИТЬ</b>\n`;
   msg += `Заказ: <code>${orderId}</code>\n`;
   msg += `Клиент: <b>${row[5]}</b>\n`;
-  msg += `Авто: <b>${lines[0]}</b>\n\n`;
+  const carLine = lines.length > 0 ? lines[0] : "Авто не указано";
+  msg += `Авто: <b>${carLine}</b>\n\n`;
   
   msg += `📋 <b>ПОЗИЦИИ:</b>\n`;
   let total = 0;
@@ -334,6 +417,7 @@ function formatPurchaseConfirmationMessage(orderId, row) {
   });
 
   msg += `\n<b>ИТОГО: ${total.toLocaleString('ru-RU')} руб.</b>`;
+  msg += `\n\n🔗 <a href="${B24_BASE_URL}/crm/lead/list/">Открыть сделку в CRM</a>`;
   return msg;
 }
 
@@ -356,7 +440,6 @@ function formatNewOrderMessage(order, b24Result) {
   } else {
     msg += `⚠️ <i>Лид в CRM не создан</i>`;
   }
-  
   return msg;
 }
 
