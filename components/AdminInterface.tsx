@@ -22,9 +22,8 @@ interface AdminModalState {
   missingItems?: string[];
 }
 
-// CONSTANT GRID LAYOUT TO ENSURE ALIGNMENT
-// 9 Columns: ID | Brand | Model | Year | VIN | Client | Status/Offers | Date | Chevron
-const GRID_LAYOUT_CLASS = "grid grid-cols-[80px_100px_1fr_60px_120px_110px_110px_90px_30px] gap-3 p-4 border-b border-slate-100 items-center";
+// UNIFIED GRID COLUMNS DEFINITION
+const GRID_COLS = "grid-cols-[80px_100px_1fr_60px_120px_110px_110px_90px_30px]";
 
 export const AdminInterface: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -385,8 +384,8 @@ export const AdminInterface: React.FC = () => {
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-             {/* HEADER WITH SORTING - Matches GRID_LAYOUT_CLASS */}
-             <div className={`${GRID_LAYOUT_CLASS} bg-slate-50 text-[9px] font-black text-slate-400 uppercase tracking-wider select-none`}>
+             {/* HEADER WITH SORTING */}
+             <div className={`grid ${GRID_COLS} gap-3 p-4 border-b border-slate-100 items-center bg-slate-50 text-[9px] font-black text-slate-400 uppercase tracking-wider select-none`}>
                  <div className="cursor-pointer flex items-center group" onClick={() => handleSort('id')}>ID <SortIcon column="id"/></div>
                  <div className="cursor-pointer flex items-center group" onClick={() => handleSort('client')}>Марка <SortIcon column="client"/></div> 
                  <div className="cursor-pointer flex items-center group" onClick={() => handleSort('client')}>Модель</div>
@@ -413,9 +412,9 @@ export const AdminInterface: React.FC = () => {
                  const carYear = order.car?.AdminYear || order.car?.year;
 
                  return (
-                 <React.Fragment key={order.id}>
-                     {/* ROW - Matches GRID_LAYOUT_CLASS */}
-                     <div className={`${GRID_LAYOUT_CLASS} hover:bg-slate-50 transition-colors cursor-pointer text-[10px] ${expandedId === order.id ? 'bg-indigo-50/30' : ''}`} onClick={() => !isEditing && setExpandedId(expandedId === order.id ? null : order.id)}>
+                 <div key={order.id} className={`transition-all duration-300 border-l-4 ${isExpanded ? 'border-l-indigo-600 ring-1 ring-indigo-600 shadow-xl bg-white relative z-10 rounded-xl my-4' : 'border-l-transparent border-b border-slate-100 hover:bg-slate-50'}`}>
+                     {/* ROW */}
+                     <div className={`grid ${GRID_COLS} gap-3 p-4 items-center cursor-pointer text-[10px]`} onClick={() => !isEditing && setExpandedId(expandedId === order.id ? null : order.id)}>
                          <div className="font-mono font-bold text-slate-700">{order.id}</div>
                          <div className="font-bold text-slate-900 uppercase truncate">{carBrand}</div>
                          <div className="font-bold text-slate-700 uppercase truncate">{carModel}</div>
@@ -437,11 +436,11 @@ export const AdminInterface: React.FC = () => {
                          </div>
 
                          <div className="text-right font-bold text-slate-400">{order.createdAt.split(/[\n,]/)[0]}</div>
-                         <div className="flex justify-end"><ChevronRight size={16} className={`text-slate-400 transition-transform ${expandedId === order.id ? 'rotate-90' : ''}`}/></div>
+                         <div className="flex justify-end"><ChevronRight size={16} className={`text-slate-400 transition-transform ${expandedId === order.id ? 'rotate-90 text-indigo-600' : ''}`}/></div>
                      </div>
                      
                      {isExpanded && (
-                         <div className="p-6 bg-slate-50 border-b border-slate-200">
+                         <div className="p-6 bg-slate-50 border-t border-slate-100 rounded-b-xl cursor-default">
                              
                              {/* DETAILS HEADER */}
                              <div className="bg-white p-4 rounded-xl border border-slate-200 mb-6 shadow-sm">
@@ -593,8 +592,8 @@ export const AdminInterface: React.FC = () => {
                              </div>
                          </div>
                      )}
-                 </React.Fragment>
-             );
+                 </div>
+                 );
              })}
              <Pagination totalItems={filteredOrders.length} itemsPerPage={itemsPerPage} currentPage={currentPage} onPageChange={setCurrentPage} onItemsPerPageChange={setItemsPerPage} />
           </div>
