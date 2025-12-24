@@ -29,6 +29,9 @@ export const ClientInterface: React.FC = () => {
   });
   const [showAuthModal, setShowAuthModal] = useState(!localStorage.getItem('client_auth'));
   const [tempAuth, setTempAuth] = useState({ name: '', phone: '' });
+  
+  // UI States
+  const [phoneFlash, setPhoneFlash] = useState(false); // State for red flash animation
 
   // Form state
   const [vin, setVin] = useState('');
@@ -81,20 +84,17 @@ export const ClientInterface: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // --- PHONE MASK LOGIC (Improved) ---
+  // --- PHONE MASK LOGIC ---
   const formatPhoneNumber = (value: string) => {
-    // 1. Оставляем только цифры и обрезаем до 11 знаков (7 + 10 цифр), чтобы не было "сброса" при переполнении
-    let digits = value.replace(/\D/g, '').slice(0, 11);
+    let digits = value.replace(/\D/g, '').slice(0, 11); // Strict limit to 11 digits
     
     if (!digits) return '';
 
-    // Если первая цифра 8, меняем на 7. Если не 7, добавляем 7.
     if (digits[0] === '8') digits = '7' + digits.slice(1);
     else if (digits[0] !== '7') digits = '7' + digits;
 
-    // Форматируем
     const match = digits.match(/^(\d{1})(\d{0,3})(\d{0,3})(\d{0,2})(\d{0,2})$/);
-    if (!match) return '+7'; // Fallback
+    if (!match) return '+7'; 
 
     let formatted = `+${match[1]}`;
     if (match[2]) formatted += ` (${match[2]}`;
@@ -107,11 +107,15 @@ export const ClientInterface: React.FC = () => {
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
-    // Разрешаем стирать полностью
-    if (val.length < tempAuth.phone.length && val.replace(/\D/g, '').length <= 1) {
-         setTempAuth({...tempAuth, phone: ''});
-         return;
+    const digitsOnly = val.replace(/\D/g, '');
+
+    // Если цифр больше 11, значит пользователь пытается ввести лишнее
+    if (digitsOnly.length > 11) {
+        setPhoneFlash(true);
+        setTimeout(() => setPhoneFlash(false), 300); // 300ms flash
+        return; // Блокируем ввод
     }
+
     setTempAuth({...tempAuth, phone: formatPhoneNumber(val)});
   };
 
@@ -123,7 +127,7 @@ export const ClientInterface: React.FC = () => {
   const handleLogin = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!tempAuth.name.trim()) return;
-    if (!isPhoneValid(tempAuth.phone)) return; // Блокируем сабмит если телефон не полный
+    if (!isPhoneValid(tempAuth.phone)) return;
     const authData = { name: tempAuth.name.trim().toUpperCase(), phone: tempAuth.phone.trim() };
     setClientAuth(authData);
     localStorage.setItem('client_auth', JSON.stringify(authData));
@@ -148,7 +152,6 @@ export const ClientInterface: React.FC = () => {
   const updateItem = (index: number, field: string, value: any) => {
     const newItems = [...items];
     if (field === 'quantity') {
-       // Limit quantity to 1000
        value = Math.min(1000, Math.max(1, value));
     }
     newItems[index] = { ...newItems[index], [field]: value };
@@ -251,14 +254,9 @@ export const ClientInterface: React.FC = () => {
       }
   };
 
-  // Filter brands based on input
   const filteredBrands = useMemo(() => {
       const q = car.brand.toLowerCase();
       if (!q) return POPULAR_BRANDS_LIST;
-      
-      const exactMatch = ALL_BRANDS_LIST.find(b => b.toLowerCase() === q);
-      // If exact match found and user hasn't typed more, show it + others? 
-      // Actually just filtering "All" is better if query is present
       return ALL_BRANDS_LIST.filter(b => b.toLowerCase().includes(q));
   }, [car.brand]);
 
@@ -316,12 +314,11 @@ export const ClientInterface: React.FC = () => {
                     <input 
                       value={tempAuth.phone} 
                       onChange={handlePhoneChange} 
-                      className={`w-full px-4 py-3 bg-slate-50 border rounded-xl font-bold text-sm outline-none transition-colors ${tempAuth.phone && !isPhoneValid(tempAuth.phone) ? 'border-red-300 text-red-600 focus:border-red-500' : 'border-slate-200 focus:border-indigo-600'}`} 
+                      // Логика стилей: если phoneFlash=true, ставим красный бордюр. Иначе обычный.
+                      // Примечание: Убрана постоянная подсветка ошибки (border-red-300), так как кнопка заблокирована.
+                      className={`w-full px-4 py-3 bg-slate-50 border rounded-xl font-bold text-sm outline-none transition-all duration-300 ${phoneFlash ? 'border-red-500 bg-red-50' : 'border-slate-200 focus:border-indigo-600'}`} 
                       placeholder="+7 (XXX) XXX-XX-XX" 
                     />
-                    {tempAuth.phone && !isPhoneValid(tempAuth.phone) && (
-                        <p className="text-[9px] font-bold text-red-500 ml-1">Номер введен не полностью</p>
-                    )}
                  </div>
                  <button type="submit" disabled={!tempAuth.name || !isPhoneValid(tempAuth.phone)} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl hover:bg-indigo-700 active:scale-95 transition-all mt-4 disabled:opacity-50 disabled:active:scale-100">Создать аккаунт</button>
              </form>
@@ -385,10 +382,8 @@ export const ClientInterface: React.FC = () => {
                             value={car.brand}
                             onChange={(e) => {
                                 setCar({...car, brand: e.target.value});
-                                // Fix: Correct typo setIsBrandListOpen -> setIsBrandOpen
                                 setIsBrandOpen(true);
                             }}
-                            // Fix: Correct typo setIsBrandListOpen -> setIsBrandOpen
                             onFocus={() => setIsBrandOpen(true)}
                             className={`w-full px-3 py-1.5 bg-white border rounded-md text-[10px] font-bold uppercase outline-none focus:border-indigo-500 ${isValidBrand ? 'border-slate-200' : 'border-red-400 text-red-600'}`}
                             placeholder="Введите марку..."
@@ -404,7 +399,6 @@ export const ClientInterface: React.FC = () => {
                                         key={brand} 
                                         onClick={() => {
                                             setCar({...car, brand});
-                                            // Fix: Correct typo setIsBrandListOpen -> setIsBrandOpen
                                             setIsBrandOpen(false);
                                         }}
                                         className="px-3 py-2 text-[10px] font-bold text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 cursor-pointer uppercase"
