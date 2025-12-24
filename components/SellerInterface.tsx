@@ -388,12 +388,14 @@ export const SellerInterface: React.FC = () => {
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-4 border-b border-slate-50 relative group hidden md:block">
-            {/* DESKTOP HEADER ROW - ALIGNED LEFT (FORCED) */}
-            <div className="grid grid-cols-[70px_100px_1.5fr_60px_80px_140px_20px] gap-4 px-3 text-[9px] font-black uppercase text-slate-400 tracking-wider text-left">
+        {/* HEADER ROW - MATCHING ROW STRUCTURE */}
+        <div className="hidden md:block border-b border-slate-50 border-l-4 border-transparent">
+            {/* UPDATED HEADER GRID: Added VIN column (130px) */}
+            <div className="p-3 grid grid-cols-[70px_100px_1fr_130px_50px_80px_140px_20px] gap-4 text-[9px] font-black uppercase text-slate-400 tracking-wider text-left">
                <div>№ заказа</div>
                <div>Марка</div>
                <div>Модель</div>
+               <div>VIN</div>
                <div>Год</div>
                <div>Дата</div>
                <div>Статус</div>
@@ -426,8 +428,8 @@ export const SellerInterface: React.FC = () => {
 
           return (
             <div key={order.id} className={`transition-all duration-500 border-l-4 ${containerStyle}`}>
-              {/* ROW CONTENT - ALIGNED LEFT */}
-              <div onClick={() => !isVanishing && setExpandedId(isExpanded ? null : order.id)} className="p-3 cursor-pointer select-none grid grid-cols-1 md:grid-cols-[70px_100px_1.5fr_60px_80px_140px_20px] gap-3 md:gap-4 items-center text-[10px] text-left">
+              {/* UPDATED ROW GRID: Matching Header */}
+              <div onClick={() => !isVanishing && setExpandedId(isExpanded ? null : order.id)} className="p-3 cursor-pointer select-none grid grid-cols-1 md:grid-cols-[70px_100px_1fr_130px_50px_80px_140px_20px] gap-3 md:gap-4 items-center text-[10px] text-left">
                   
                   {/* ID */}
                   <div className="font-mono font-bold truncate flex items-center gap-2">
@@ -445,6 +447,12 @@ export const SellerInterface: React.FC = () => {
                   <div className="font-black uppercase truncate text-slate-600 flex items-center gap-2">
                      <span className="md:hidden text-slate-400 w-12">Модель:</span>
                      {modelPart}
+                  </div>
+
+                  {/* NEW VIN COLUMN */}
+                  <div className="font-mono font-bold text-slate-500 flex items-center gap-2">
+                     <span className="md:hidden text-slate-400 w-12">VIN:</span>
+                     {order.vin}
                   </div>
 
                   {/* YEAR */}

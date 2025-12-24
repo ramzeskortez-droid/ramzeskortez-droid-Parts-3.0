@@ -426,9 +426,11 @@ export const ClientInterface: React.FC = () => {
 
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="p-4 border-b border-slate-50 relative group hidden md:block">
-            <div className="grid grid-cols-[80px_1fr_60px_80px_110px_20px] gap-3 text-[9px] font-black uppercase text-slate-400 tracking-wider">
+            {/* UPDATED HEADER GRID: Added VIN column (130px) */}
+            <div className="grid grid-cols-[80px_1fr_130px_50px_80px_110px_20px] gap-3 text-[9px] font-black uppercase text-slate-400 tracking-wider">
                <div>№ заказа</div>
                <div>Модель</div>
+               <div>VIN</div>
                <div>Поз.</div>
                <div>Дата</div>
                <div className="text-right">Статус</div>
@@ -457,10 +459,13 @@ export const ClientInterface: React.FC = () => {
 
             return (
               <div key={order.id} className={`transition-all duration-700 border-l-4 ${containerStyle}`}>
-                 <div className="p-3 grid grid-cols-[80px_1fr_60px_80px_110px_20px] items-center gap-3 cursor-pointer min-h-[56px]" onClick={() => !isVanishing && !isOptimistic && setExpandedId(isExpanded ? null : order.id)}>
-                    <div className="flex items-center text-left">{isOptimistic ? (<div className="flex items-center gap-1.5 text-indigo-500"><Loader2 size={12} className="animate-spin"/><span className="text-[9px] font-bold uppercase tracking-wider">Создание</span></div>) : (<div className="flex flex-col"><span className="font-mono font-bold text-[10px] text-slate-900 truncate block">{order.id}</span><span className="text-[8px] font-bold text-slate-400 uppercase leading-none tracking-tight truncate block">{order.vin}</span></div>)}</div>
+                 {/* UPDATED ROW GRID: Matching Header */}
+                 <div className="p-3 grid grid-cols-[80px_1fr_130px_50px_80px_110px_20px] items-center gap-3 cursor-pointer min-h-[56px]" onClick={() => !isVanishing && !isOptimistic && setExpandedId(isExpanded ? null : order.id)}>
+                    <div className="flex items-center text-left">{isOptimistic ? (<div className="flex items-center gap-1.5 text-indigo-500"><Loader2 size={12} className="animate-spin"/><span className="text-[9px] font-bold uppercase tracking-wider">Создание</span></div>) : (<span className="font-mono font-bold text-[10px] text-slate-900 truncate block">{order.id}</span>)}</div>
                     <div className="flex flex-col justify-center min-w-0 text-left"><span className="font-bold text-[10px] text-slate-700 uppercase leading-none truncate block">{displayModel}</span></div>
-                    <div className="flex items-center gap-1 text-left"><Package size={12} className="text-slate-300"/><span className="text-[9px] font-bold text-slate-500">{itemsCount} поз.</span></div>
+                    {/* NEW VIN COLUMN */}
+                    <div className="flex items-center text-left"><span className="font-mono font-bold text-[10px] text-slate-500 uppercase leading-none tracking-tight truncate block">{order.vin}</span></div>
+                    <div className="flex items-center gap-1 text-left"><Package size={12} className="text-slate-300"/><span className="text-[9px] font-bold text-slate-500">{itemsCount}</span></div>
                     <div className="flex items-center gap-1 text-left"><Calendar size={12} className="text-slate-300"/><span className="text-[9px] font-bold text-slate-500">{orderDate}</span></div>
                     <div className="flex justify-end text-right">{order.isRefused ? (<span className="px-2 py-1 rounded-md font-black text-[8px] uppercase bg-red-100 text-red-600 whitespace-nowrap shadow-sm flex items-center gap-1"><Ban size={10}/> АННУЛИРОВАН</span>) : order.readyToBuy ? (<span className="px-2 py-1 rounded-md font-black text-[8px] uppercase bg-emerald-600 text-white whitespace-nowrap shadow-sm">КУПЛЕНО</span>) : (<span className={`px-2 py-1 rounded-md font-bold text-[8px] uppercase whitespace-nowrap shadow-sm border ${hasWinning ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>{hasWinning ? 'ГОТОВО' : 'В ОБРАБОТКЕ'}</span>)}</div>
                     <div className="flex justify-end">{isOptimistic ? null : <MoreHorizontal size={14} className="text-slate-300" />}</div>
