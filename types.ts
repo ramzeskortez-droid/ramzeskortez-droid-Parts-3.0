@@ -81,4 +81,6 @@ export interface Order {
   readyToBuy?: boolean;
   // Новое поле: отказ/аннулирование (Колонка N)
   isRefused?: boolean;
+  // Новое поле: причина отказа
+  refusalReason?: string;
 }

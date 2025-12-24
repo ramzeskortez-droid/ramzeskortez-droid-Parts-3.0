@@ -60,15 +60,12 @@ export const ClientInterface: React.FC = () => {
     try {
       const data = await SheetService.getOrders(true);
       
-      // TASK EXTRA 2: Client Isolation
-      // Only show orders belonging to this client
       const myOrders = clientAuth?.name 
         ? data.filter(o => o.clientName === clientAuth.name)
         : [];
 
       setOrders(prev => {
          const optimisticPending = prev.filter(o => o.id.startsWith('temp-'));
-         // Combine optimistic (local) + fetched (server)
          return [...optimisticPending, ...myOrders];
       });
     } catch (e) { console.error(e); }
@@ -148,8 +145,13 @@ export const ClientInterface: React.FC = () => {
   const handleLogout = () => {
     localStorage.removeItem('client_auth');
     setClientAuth(null);
-    setOrders([]); // Clear data on logout
+    setOrders([]); 
     setShowAuthModal(true);
+    
+    // Reset Form Data
+    setVin('');
+    setCar({ brand: '', model: '', bodyType: '', year: '', engine: '', transmission: '' });
+    setItems([{ name: '', quantity: 1, color: '', category: 'Оригинал' as PartCategory, refImage: '' }]);
   };
 
   const updateItem = (index: number, field: string, value: any) => {
@@ -159,17 +161,23 @@ export const ClientInterface: React.FC = () => {
     setItems(newItems);
   };
 
+  const isFormValid = useMemo(() => {
+      const hasBrand = !!car.brand && FULL_BRAND_SET.has(car.brand);
+      const hasItems = items.length > 0 && items.every(i => i.name.trim().length > 0);
+      return hasBrand && hasItems;
+  }, [car.brand, items]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!clientAuth?.name || items.some(i => !i.name)) { alert('Заполните названия деталей.'); return; }
-    if (!car.brand || !FULL_BRAND_SET.has(car.brand)) { alert('Выберите корректную марку из списка.'); return; }
-    if (!car.model) { alert('Укажите модель авто.'); return; }
+    if (!isFormValid) return;
 
     const finalCar = { ...car, model: `${car.brand} ${car.model}`.trim() };
     const tempId = `temp-${Date.now()}`;
+    const finalVin = vin || 'N/A'; 
+
     const optimisticOrder: any = {
         id: tempId,
-        vin: vin || 'N/A',
+        vin: finalVin,
         clientName: clientAuth.name,
         car: finalCar,
         items,
@@ -185,7 +193,7 @@ export const ClientInterface: React.FC = () => {
     setItems([{ name: '', quantity: 1, color: '', category: 'Оригинал', refImage: '' }]);
 
     try {
-        const realId = await SheetService.createOrder(vin, items, clientAuth.name, finalCar, clientAuth.phone);
+        const realId = await SheetService.createOrder(finalVin, items, clientAuth.name, finalCar, clientAuth.phone);
         setOrders(prev => prev.map(o => o.id === tempId ? { ...o, id: realId } : o));
         setHighlightedId(realId); 
         setSuccessToast({ message: `Заказ ${realId} успешно создан`, id: Date.now().toString() });
@@ -231,13 +239,14 @@ export const ClientInterface: React.FC = () => {
     setRefuseModalOrder(null);
     
     try {
-      await SheetService.refuseOrder(orderId);
+      // source: 'CLIENT' signals to backend to use Client Refusal Template
+      await SheetService.refuseOrder(orderId, "Отмена клиентом", 'CLIENT'); 
       setVanishingIds(prev => new Set(prev).add(orderId));
       setSuccessToast({ message: `Заказ ${orderId} аннулирован`, id: Date.now().toString() });
       setTimeout(() => setSuccessToast(null), 3000);
 
       setTimeout(() => {
-          setOrders(prev => prev.map(o => o.id === orderId ? { ...o, isRefused: true } : o));
+          setOrders(prev => prev.map(o => o.id === orderId ? { ...o, isRefused: true, refusalReason: "Отмена клиентом" } : o));
           setVanishingIds(prev => { const n = new Set(prev); n.delete(orderId); return n; });
           fetchOrders();
       }, 700);
@@ -249,7 +258,6 @@ export const ClientInterface: React.FC = () => {
     }
   };
 
-  // ... (rest of helper functions unchanged)
   const handleDemoForm = () => {
     const demoVins = ['WBA520373786', 'WAUZZZ4K2L001'];
     const randomIdx = Math.floor(Math.random() * demoVins.length);
@@ -316,7 +324,6 @@ export const ClientInterface: React.FC = () => {
           </div>
       )}
 
-      {/* CONFIRMATION MODAL */}
       {refuseModalOrder && (
           <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200" onClick={() => setRefuseModalOrder(null)}>
               <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
@@ -356,7 +363,6 @@ export const ClientInterface: React.FC = () => {
         </div>
       )}
 
-      {/* CLIENT HEADER / PROFILE */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
          <div className="flex items-center gap-4">
             <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600 border border-indigo-100 shadow-inner"><UserCircle2 size={24}/></div>
@@ -365,19 +371,25 @@ export const ClientInterface: React.FC = () => {
          <button onClick={handleLogout} className="p-2.5 bg-slate-50 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-xl transition-all border border-transparent hover:border-red-100 flex items-center gap-2 group"><span className="text-[10px] font-black uppercase opacity-0 group-hover:opacity-100 transition-all">Выход</span><LogOut size={18}/></button>
       </div>
 
-      {/* FORM SECTION (unchanged) */}
       <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="px-4 py-2 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
            <div className="flex items-center gap-2"><Car size={14} className="text-slate-500"/><h2 className="text-[11px] font-bold uppercase tracking-tight">Новая заявка</h2></div>
            <button onClick={handleDemoForm} className="flex items-center gap-1.5 px-2 py-1 bg-indigo-50 text-indigo-700 rounded-md text-[9px] font-bold hover:bg-indigo-100 transition-all border border-indigo-100 uppercase"><Zap size={10}/> Демо заказ</button>
         </div>
         <form onSubmit={handleSubmit} className="p-4 space-y-6">
-          {/* ...Form fields... */}
           <div className="bg-slate-50/50 p-4 rounded-xl border border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1"><label className="text-[9px] font-bold text-slate-400 uppercase ml-1">VIN / Шасси</label><input value={vin} onChange={e => setVin(e.target.value.toUpperCase())} className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md font-mono text-[10px] outline-none" placeholder="WBA..." /></div>
               <div className="space-y-1"><label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Имя Клиента</label><input value={clientAuth?.name || ''} readOnly className="w-full px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-md text-[10px] font-bold uppercase text-slate-400 outline-none cursor-not-allowed" /></div>
               <div className="md:col-span-2 grid grid-cols-2 md:grid-cols-3 gap-3">
-                  <div className="space-y-1 relative"><label className="text-[8px] font-bold text-slate-400 uppercase ml-1">Марка (Бренд)</label><div className="relative"><input ref={brandInputRef} value={car.brand} onChange={(e) => { setCar({...car, brand: e.target.value}); setIsBrandOpen(true); }} onFocus={() => setIsBrandOpen(true)} className={`w-full px-3 py-1.5 bg-white border rounded-md text-[10px] font-bold uppercase outline-none focus:border-indigo-500 ${isValidBrand ? 'border-slate-200' : 'border-red-400 text-red-600'}`} placeholder="Введите марку..." /><ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400" /></div>{isBrandOpen && (<div ref={brandListRef} className="absolute z-50 left-0 right-0 top-full mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-xl divide-y divide-slate-50 animate-in fade-in zoom-in-95 duration-100">{filteredBrands.length > 0 ? (filteredBrands.map((brand, idx) => (<div key={brand} onClick={() => { setCar({...car, brand}); setIsBrandOpen(false); }} className="px-3 py-2 text-[10px] font-bold text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 cursor-pointer uppercase">{brand}</div>))) : (<div className="px-3 py-2 text-[10px] text-slate-400 italic">Ничего не найдено</div>)}</div>)}{!isValidBrand && car.brand.length > 0 && !isBrandOpen && (<div className="text-[8px] font-bold text-red-500 mt-1 absolute -bottom-4 left-0">Выберите марку из списка</div>)}</div>
+                  <div className="space-y-1 relative">
+                      <label className="text-[8px] font-bold text-slate-400 uppercase ml-1">Марка (Бренд)</label>
+                      <div className="relative">
+                          <input ref={brandInputRef} value={car.brand} onChange={(e) => { setCar({...car, brand: e.target.value}); setIsBrandOpen(true); }} onFocus={() => setIsBrandOpen(true)} className={`w-full px-3 py-1.5 bg-white border rounded-md text-[10px] font-bold uppercase outline-none focus:border-indigo-500 ${!isValidBrand ? 'border-red-300 bg-red-50 text-red-600' : 'border-slate-200'}`} placeholder="Введите марку..." />
+                          <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400" />
+                      </div>
+                      {isBrandOpen && (<div ref={brandListRef} className="absolute z-50 left-0 right-0 top-full mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-xl divide-y divide-slate-50 animate-in fade-in zoom-in-95 duration-100">{filteredBrands.length > 0 ? (filteredBrands.map((brand, idx) => (<div key={brand} onClick={() => { setCar({...car, brand}); setIsBrandOpen(false); }} className="px-3 py-2 text-[10px] font-bold text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 cursor-pointer uppercase">{brand}</div>))) : (<div className="px-3 py-2 text-[10px] text-slate-400 italic">Ничего не найдено</div>)}</div>)}
+                      {!isValidBrand && car.brand.length > 0 && !isBrandOpen && (<div className="text-[8px] font-bold text-red-500 mt-1 absolute -bottom-4 left-0">Выберите марку из списка</div>)}
+                  </div>
                   <div className="space-y-1"><label className="text-[8px] font-bold text-slate-400 uppercase ml-1">Модель</label><input value={car.model} onChange={e => setCar({...car, model: e.target.value})} className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-[10px] font-bold outline-none uppercase" placeholder="Напишите модель (X5, Camry...)" /></div>
                   <div className="space-y-1"><label className="text-[8px] font-bold text-slate-400 uppercase ml-1">Год выпуска</label><input value={car.year} onChange={e => setCar({...car, year: e.target.value})} className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-md text-[10px] font-bold text-center" placeholder="202X" /></div>
               </div>
@@ -388,7 +400,7 @@ export const ClientInterface: React.FC = () => {
               <div key={idx} className="flex gap-2 items-start group">
                 <div className="flex-grow bg-white p-3 rounded-xl border border-slate-200 shadow-sm space-y-3">
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-                    <div className="md:col-span-2"><input value={item.name} maxLength={90} onChange={e => updateItem(idx, 'name', e.target.value)} className="w-full px-2 py-1 bg-slate-50 border border-slate-100 rounded text-[10px] font-bold outline-none focus:border-indigo-300 transition-colors" placeholder="Название детали (макс. 90 симв.)" /></div>
+                    <div className="md:col-span-2"><input value={item.name} maxLength={90} onChange={e => updateItem(idx, 'name', e.target.value)} className={`w-full px-2 py-1 bg-slate-50 border rounded text-[10px] font-bold outline-none focus:border-indigo-300 transition-colors ${!item.name.trim() ? 'border-red-300 bg-red-50' : 'border-slate-100'}`} placeholder="Название детали (макс. 90 симв.)" /></div>
                     <div className="relative"><select value={item.category} onChange={e => updateItem(idx, 'category', e.target.value as PartCategory)} className="w-full appearance-none px-2 py-1 bg-slate-50 border border-slate-100 rounded text-[9px] font-black uppercase pr-8 outline-none"><option>Оригинал</option><option>Б/У</option><option>Аналог</option></select><ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400" /></div>
                     <div className="flex items-center gap-1"><input type="number" value={item.quantity} onChange={e => updateItem(idx, 'quantity', parseInt(e.target.value))} className="w-full px-1 py-1 bg-slate-50 border border-slate-100 rounded text-[10px] text-center font-black" /></div>
                   </div>
@@ -398,11 +410,10 @@ export const ClientInterface: React.FC = () => {
             ))}
             <button type="button" onClick={() => setItems([...items, { name: '', quantity: 1, color: '', category: 'Оригинал', refImage: '' }])} className="text-[9px] font-bold text-indigo-600 uppercase hover:underline flex items-center gap-1"><Plus size={10}/> Добавить деталь</button>
           </div>
-          <button type="submit" className="w-full py-3 bg-slate-900 text-white rounded-xl font-black uppercase text-[11px] tracking-widest shadow-xl hover:bg-slate-800 active:scale-95 transition-all flex items-center justify-center gap-3"><Send className="w-4 h-4" /> Отправить запрос</button>
+          <button type="submit" disabled={!isFormValid} className={`w-full py-3 rounded-xl font-black uppercase text-[11px] tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 ${isFormValid ? 'bg-slate-900 text-white hover:bg-slate-800 active:scale-95' : 'bg-slate-300 text-slate-500 cursor-not-allowed'}`}><Send className="w-4 h-4" /> Отправить запрос</button>
         </form>
       </section>
 
-      {/* TABS & LIST */}
       <div className="space-y-4">
         <div className="relative group"><Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-indigo-500 transition-colors"/><input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Поиск по VIN, номеру заказа или названию детали..." className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl text-[10px] font-bold outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all shadow-sm" /></div>
         <div className="flex justify-between items-end border-b border-slate-200">
@@ -414,6 +425,17 @@ export const ClientInterface: React.FC = () => {
         </div>
 
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-slate-50 relative group hidden md:block">
+            <div className="grid grid-cols-[80px_1fr_60px_80px_110px_20px] gap-3 text-[9px] font-black uppercase text-slate-400 tracking-wider">
+               <div>№ заказа</div>
+               <div>Модель</div>
+               <div>Поз.</div>
+               <div>Дата</div>
+               <div className="text-right">Статус</div>
+               <div></div>
+            </div>
+          </div>
+          
           {filteredOrders.length === 0 && <div className="p-8 text-center text-[10px] text-slate-400 font-bold uppercase italic tracking-widest">Список пуст</div>}
           {paginatedOrders.map(order => {
             const isExpanded = expandedId === order.id;
@@ -436,11 +458,11 @@ export const ClientInterface: React.FC = () => {
             return (
               <div key={order.id} className={`transition-all duration-700 border-l-4 ${containerStyle}`}>
                  <div className="p-3 grid grid-cols-[80px_1fr_60px_80px_110px_20px] items-center gap-3 cursor-pointer min-h-[56px]" onClick={() => !isVanishing && !isOptimistic && setExpandedId(isExpanded ? null : order.id)}>
-                    <div className="flex items-center">{isOptimistic ? (<div className="flex items-center gap-1.5 text-indigo-500"><Loader2 size={12} className="animate-spin"/><span className="text-[9px] font-bold uppercase tracking-wider">Создание</span></div>) : (<div className="flex flex-col"><span className="font-mono font-bold text-[10px] text-slate-900 truncate block">{order.id}</span><span className="text-[8px] font-bold text-slate-400 uppercase leading-none tracking-tight truncate block">{order.vin}</span></div>)}</div>
-                    <div className="flex flex-col justify-center min-w-0"><span className="font-bold text-[10px] text-slate-700 uppercase leading-none truncate block">{displayModel}</span></div>
-                    <div className="flex items-center gap-1"><Package size={12} className="text-slate-300"/><span className="text-[9px] font-bold text-slate-500">{itemsCount} поз.</span></div>
-                    <div className="flex items-center gap-1"><Calendar size={12} className="text-slate-300"/><span className="text-[9px] font-bold text-slate-500">{orderDate}</span></div>
-                    <div className="flex justify-end">{order.isRefused ? (<span className="px-2 py-1 rounded-md font-black text-[8px] uppercase bg-red-100 text-red-600 whitespace-nowrap shadow-sm flex items-center gap-1"><Ban size={10}/> АННУЛИРОВАН</span>) : order.readyToBuy ? (<span className="px-2 py-1 rounded-md font-black text-[8px] uppercase bg-emerald-600 text-white whitespace-nowrap shadow-sm">КУПЛЕНО</span>) : (<span className={`px-2 py-1 rounded-md font-bold text-[8px] uppercase whitespace-nowrap shadow-sm border ${hasWinning ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>{hasWinning ? 'ГОТОВО' : 'В ОБРАБОТКЕ'}</span>)}</div>
+                    <div className="flex items-center text-left">{isOptimistic ? (<div className="flex items-center gap-1.5 text-indigo-500"><Loader2 size={12} className="animate-spin"/><span className="text-[9px] font-bold uppercase tracking-wider">Создание</span></div>) : (<div className="flex flex-col"><span className="font-mono font-bold text-[10px] text-slate-900 truncate block">{order.id}</span><span className="text-[8px] font-bold text-slate-400 uppercase leading-none tracking-tight truncate block">{order.vin}</span></div>)}</div>
+                    <div className="flex flex-col justify-center min-w-0 text-left"><span className="font-bold text-[10px] text-slate-700 uppercase leading-none truncate block">{displayModel}</span></div>
+                    <div className="flex items-center gap-1 text-left"><Package size={12} className="text-slate-300"/><span className="text-[9px] font-bold text-slate-500">{itemsCount} поз.</span></div>
+                    <div className="flex items-center gap-1 text-left"><Calendar size={12} className="text-slate-300"/><span className="text-[9px] font-bold text-slate-500">{orderDate}</span></div>
+                    <div className="flex justify-end text-right">{order.isRefused ? (<span className="px-2 py-1 rounded-md font-black text-[8px] uppercase bg-red-100 text-red-600 whitespace-nowrap shadow-sm flex items-center gap-1"><Ban size={10}/> АННУЛИРОВАН</span>) : order.readyToBuy ? (<span className="px-2 py-1 rounded-md font-black text-[8px] uppercase bg-emerald-600 text-white whitespace-nowrap shadow-sm">КУПЛЕНО</span>) : (<span className={`px-2 py-1 rounded-md font-bold text-[8px] uppercase whitespace-nowrap shadow-sm border ${hasWinning ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>{hasWinning ? 'ГОТОВО' : 'В ОБРАБОТКЕ'}</span>)}</div>
                     <div className="flex justify-end">{isOptimistic ? null : <MoreHorizontal size={14} className="text-slate-300" />}</div>
                  </div>
 
@@ -453,38 +475,66 @@ export const ClientInterface: React.FC = () => {
                           </div>
                       )}
                       
-                      {hasWinning && (
+                      {(hasWinning || order.isRefused) && (
                         <div className="space-y-3">
-                           <h4 className="text-[9px] font-black uppercase tracking-widest text-slate-950 flex items-center gap-2 mb-2"><CheckCircle2 size={12} className="text-emerald-500"/> Согласованные позиции</h4>
+                           {hasWinning && <h4 className="text-[9px] font-black uppercase tracking-widest text-slate-950 flex items-center gap-2 mb-2"><CheckCircle2 size={12} className="text-emerald-500"/> Согласованные позиции</h4>}
                            <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-                              <div className="divide-y divide-slate-100">
-                                {winningItems.map((item, idx) => {
-                                     const finalPrice = item.adminPrice ?? item.sellerPrice ?? 0;
-                                     const curSymbol = getCurrencySymbol(item.adminCurrency ?? item.sellerCurrency ?? 'RUB');
-                                     const displayName = item.AdminName || item.name;
-                                     const displayQty = item.AdminQuantity || item.offeredQuantity || item.quantity;
-                                     return (
-                                        <div key={idx} className="bg-white p-3 flex justify-between items-center group hover:bg-slate-50 transition-colors">
-                                            <div className="flex items-center gap-3"><div className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center text-[10px] font-bold">{idx + 1}</div><div><span className="text-[10px] font-black text-slate-900 block uppercase">{displayName}</span><span className="text-[8px] font-bold text-slate-400 uppercase">{item.category} | {displayQty} шт</span></div></div>
-                                            <div className="text-right"><div className="text-[10px] font-black text-slate-900">{(finalPrice * displayQty).toLocaleString()} {curSymbol}</div><div className="text-[8px] text-slate-400 font-bold">{finalPrice.toLocaleString()} {curSymbol} / шт</div></div>
-                                        </div>
-                                     );
-                                })}
-                              </div>
-                              <div className="bg-slate-900 text-white p-4 flex flex-col md:flex-row justify-between items-center gap-4">
-                                  <div className="flex items-center gap-4"><div className="flex items-center gap-2"><Calculator size={14} className="text-emerald-400"/><span className="font-black text-[10px] uppercase tracking-widest">Итого к оплате</span></div><div className="text-base font-black tracking-tight">{totalSum.toLocaleString()} {symbol}</div></div>
+                              {hasWinning && (
+                                  <div className="divide-y divide-slate-100">
+                                    {winningItems.map((item, idx) => {
+                                         const finalPrice = item.adminPrice ?? item.sellerPrice ?? 0;
+                                         const curSymbol = getCurrencySymbol(item.adminCurrency ?? item.sellerCurrency ?? 'RUB');
+                                         const displayName = item.AdminName || item.name;
+                                         const displayQty = item.AdminQuantity || item.offeredQuantity || item.quantity;
+                                         return (
+                                            <div key={idx} className="bg-white p-3 flex justify-between items-center group hover:bg-slate-50 transition-colors">
+                                                <div className="flex items-center gap-3"><div className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center text-[10px] font-bold">{idx + 1}</div><div><span className="text-[10px] font-black text-slate-900 block uppercase">{displayName}</span><span className="text-[8px] font-bold text-slate-400 uppercase">{item.category} | {displayQty} шт</span></div></div>
+                                                <div className="text-right"><div className="text-[10px] font-black text-slate-900">{(finalPrice * displayQty).toLocaleString()} {curSymbol}</div><div className="text-[8px] text-slate-400 font-bold">{finalPrice.toLocaleString()} {curSymbol} / шт</div></div>
+                                            </div>
+                                         );
+                                    })}
+                                  </div>
+                              )}
+                              
+                              {/* FOOTER FIX: Added flex-wrap and better alignment for mobile */}
+                              <div className="bg-slate-900 text-white p-4 flex flex-wrap md:flex-nowrap justify-between items-center gap-4">
+                                  <div className="flex flex-col md:flex-row items-start md:items-center gap-2 md:gap-4 w-full md:w-auto">
+                                      {hasWinning && (
+                                          <div className="flex items-center gap-4 whitespace-nowrap">
+                                              <div className="flex items-center gap-2"><Calculator size={14} className="text-emerald-400"/><span className="font-black text-[10px] uppercase tracking-widest">Итого к оплате</span></div>
+                                              <div className="text-base font-black tracking-tight">{totalSum.toLocaleString()} {symbol}</div>
+                                          </div>
+                                      )}
+                                      
+                                      {order.isRefused && (
+                                          <div className="flex items-center gap-2 w-full md:w-auto max-w-full">
+                                              <div className="text-[10px] text-red-300 font-bold uppercase flex items-center gap-2 bg-red-950/50 px-3 py-1.5 rounded-lg border border-red-900/50 w-full truncate">
+                                                  <AlertCircle size={12} className="shrink-0"/> 
+                                                  <span className="truncate">Причина: {order.refusalReason || "Не указана"}</span>
+                                              </div>
+                                          </div>
+                                      )}
+                                  </div>
+                                  
                                   {!order.readyToBuy && !order.isRefused ? (
-                                    <div className="flex gap-2 w-full md:w-auto">
+                                    <div className="flex gap-2 w-full md:w-auto shrink-0">
                                         <button 
                                             type="button" 
                                             onClick={(e) => openRefuseModal(e, order)} 
-                                            className="flex-1 md:flex-none px-4 py-2.5 rounded-xl font-bold text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95 bg-slate-700 text-slate-300 hover:bg-red-600 hover:text-white"
+                                            className="flex-1 md:flex-none px-4 py-2.5 rounded-xl font-bold text-[10px] uppercase tracking-widest transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95 bg-slate-700 text-slate-300 hover:bg-red-600 hover:text-white whitespace-nowrap"
                                         >
                                             <X size={14}/> Отказаться
                                         </button>
-                                        <button onClick={() => handleConfirmPurchase(order.id)} disabled={!!isConfirming} className="flex-[2] md:flex-none px-6 py-2.5 bg-emerald-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95 disabled:opacity-50">{isConfirming === order.id ? <Loader2 size={14} className="animate-spin"/> : <ShoppingCart size={14}/>} Готов купить</button>
+                                        <button onClick={() => handleConfirmPurchase(order.id)} disabled={!!isConfirming} className="flex-[2] md:flex-none px-6 py-2.5 bg-emerald-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95 disabled:opacity-50 whitespace-nowrap">{isConfirming === order.id ? <Loader2 size={14} className="animate-spin"/> : <ShoppingCart size={14}/>} Готов купить</button>
                                     </div>
-                                  ) : (<div className={`flex items-center gap-2 px-4 py-2 rounded-lg border ${order.isRefused ? 'bg-red-500/20 border-red-500/30 text-red-400' : 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400'}`}>{order.isRefused ? <Ban size={14}/> : <Archive size={14}/>}<span className="text-[9px] font-black uppercase">{order.isRefused ? 'АННУЛИРОВАН' : 'В Архиве (Оплачено)'}</span></div>)}
+                                  ) : (
+                                      !order.isRefused && (
+                                        <div className="flex items-center gap-2 px-4 py-2 rounded-lg border bg-emerald-500/20 border-emerald-500/30 text-emerald-400 w-full md:w-auto justify-center md:justify-start">
+                                            <Archive size={14}/>
+                                            <span className="text-[9px] font-black uppercase whitespace-nowrap">В Архиве (Оплачено)</span>
+                                        </div>
+                                      )
+                                  )}
                               </div>
                            </div>
                         </div>

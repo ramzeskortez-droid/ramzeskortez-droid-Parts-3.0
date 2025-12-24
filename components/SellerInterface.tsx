@@ -5,7 +5,7 @@ import { Order, OrderStatus, Currency, RowType } from '../types';
 import { Pagination } from './Pagination';
 import { 
   User, CheckCircle, Search, RefreshCw, Edit2, LogOut, ShieldCheck, AlertCircle,
-  BarChart3, Calendar, TrendingUp, Clock, Car, ChevronDown, ChevronRight, Loader2, CheckCircle2, UserCircle2, AlertTriangle, XCircle, FileText, Ban
+  BarChart3, Calendar, TrendingUp, Clock, Car, ChevronDown, ChevronRight, Loader2, CheckCircle2, UserCircle2, AlertTriangle, XCircle, FileText, Ban, Copy
 } from 'lucide-react';
 
 export const SellerInterface: React.FC = () => {
@@ -57,34 +57,51 @@ export const SellerInterface: React.FC = () => {
     return () => clearInterval(interval);
   }, [sellerAuth]);
 
-  // Auth Handlers (Identical to ClientInterface logic)
-  const formatPhoneNumber = (value: string) => {
-    let digits = value.replace(/\D/g, '').slice(0, 11);
-    if (!digits) return '';
-    if (digits[0] === '8') digits = '7' + digits.slice(1);
-    else if (digits[0] !== '7') digits = '7' + digits;
-    const match = digits.match(/^(\d{1})(\d{0,3})(\d{0,3})(\d{0,2})(\d{0,2})$/);
-    if (!match) return '+7'; 
+  // Auth Handlers for Seller (Chinese +86 format)
+  const formatChinesePhoneNumber = (value: string) => {
+    // Remove all non-digit chars
+    let digits = value.replace(/\D/g, '');
+    
+    // Auto-add 86 prefix if not present or just starting
+    if (!digits.startsWith('86')) {
+        // If user typed '1', assume they mean +86 1...
+        // But to be safe, if we force Chinese, we just prepend 86 if missing
+        // However, standard logic:
+        if (digits.length > 0) digits = '86' + digits;
+    }
+    
+    // Limit to 86 + 11 digits = 13 digits total
+    digits = digits.slice(0, 13);
+    
+    // Format: +86 1XX XXXX XXXX
+    // Regex groups: (86) (3) (4) (4)
+    const match = digits.match(/^(\d{2})(\d{0,3})(\d{0,4})(\d{0,4})$/);
+    if (!match) return '+86';
+    
     let formatted = `+${match[1]}`;
-    if (match[2]) formatted += ` (${match[2]}`;
-    if (match[3]) formatted += `) ${match[3]}`;
-    if (match[4]) formatted += `-${match[4]}`;
-    if (match[5]) formatted += `-${match[5]}`;
+    if (match[2]) formatted += ` ${match[2]}`;
+    if (match[3]) formatted += ` ${match[3]}`;
+    if (match[4]) formatted += ` ${match[4]}`;
+    
     return formatted;
   };
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     const digitsOnly = val.replace(/\D/g, '');
-    if (digitsOnly.length > 11) {
+    // 86 + 11 digits = 13 max digits
+    if (digitsOnly.length > 13) {
         setPhoneFlash(true);
         setTimeout(() => setPhoneFlash(false), 300); 
         return; 
     }
-    setTempAuth({...tempAuth, phone: formatPhoneNumber(val)});
+    setTempAuth({...tempAuth, phone: formatChinesePhoneNumber(val)});
   };
 
-  const isPhoneValid = (phone: string) => phone.length === 18;
+  const isPhoneValid = (phone: string) => {
+      // "+86 1XX XXXX XXXX" is 15 chars length including spaces
+      return phone.length >= 15; 
+  };
 
   const handleLogin = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -99,8 +116,8 @@ export const SellerInterface: React.FC = () => {
 
   const handleDemoLogin = (num: 1 | 2) => {
     const demo = num === 1 
-      ? { name: 'ПОСТАВЩИК 1', phone: '+7 (999) 777-11-11' }
-      : { name: 'ПОСТАВЩИК 2', phone: '+7 (999) 888-22-22' };
+      ? { name: 'ПОСТАВЩИК 1', phone: '+86 138 0013 8000' }
+      : { name: 'ПОСТАВЩИК 2', phone: '+86 139 8888 2222' };
     setSellerAuth(demo);
     localStorage.setItem('seller_auth_data', JSON.stringify(demo));
     setShowAuthModal(false);
@@ -263,7 +280,8 @@ export const SellerInterface: React.FC = () => {
         setVanishingIds(prev => { const n = new Set(prev); n.delete(order.id); return n; });
         const finalItems = order.items.map(item => {
           const stateKey = `${order.id}-${item.name}`;
-          const state = editingItems[stateKey] || { price: 0, currency: 'RUB', offeredQty: item.quantity, refImage: '' };
+          // Default currency for seller is CNY
+          const state = editingItems[stateKey] || { price: 0, currency: 'CNY', offeredQty: item.quantity, refImage: '' };
           return { ...item, sellerPrice: state.price, sellerCurrency: state.currency, offeredQuantity: state.offeredQty, refImage: state.refImage, available: state.offeredQty > 0 };
         });
         try {
@@ -273,6 +291,12 @@ export const SellerInterface: React.FC = () => {
           setOptimisticSentIds(prev => { const n = new Set(prev); n.delete(order.id); return n; });
         }
     }, 600);
+  };
+  
+  const copyToClipboard = (text: string) => {
+      navigator.clipboard.writeText(text);
+      setSuccessToast({ message: "Скопировано", id: Date.now().toString() });
+      setTimeout(() => setSuccessToast(null), 1000);
   };
 
   return (
@@ -298,7 +322,7 @@ export const SellerInterface: React.FC = () => {
              <div className="w-full flex items-center gap-4 py-2"><div className="flex-grow h-px bg-slate-100"></div><span className="text-[9px] font-bold text-slate-300 uppercase">или</span><div className="flex-grow h-px bg-slate-100"></div></div>
              <form onSubmit={handleLogin} className="w-full space-y-3">
                  <div className="space-y-1"><label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Название Компании</label><input autoFocus value={tempAuth.name} onChange={e => setTempAuth({...tempAuth, name: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-indigo-600 uppercase" placeholder="ООО АВТО" /></div>
-                 <div className="space-y-1"><label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Номер телефона</label><input value={tempAuth.phone} onChange={handlePhoneChange} className={`w-full px-4 py-3 bg-slate-50 border rounded-xl font-bold text-sm outline-none transition-all duration-300 ${phoneFlash ? 'border-red-500 bg-red-50' : 'border-slate-200 focus:border-indigo-600'}`} placeholder="+7 (XXX) XXX-XX-XX" /></div>
+                 <div className="space-y-1"><label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Номер телефона</label><input value={tempAuth.phone} onChange={handlePhoneChange} className={`w-full px-4 py-3 bg-slate-50 border rounded-xl font-bold text-sm outline-none transition-all duration-300 ${phoneFlash ? 'border-red-500 bg-red-50' : 'border-slate-200 focus:border-indigo-600'}`} placeholder="+86 1XX XXXX XXXX" /></div>
                  <button type="submit" disabled={!tempAuth.name || !isPhoneValid(tempAuth.phone)} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl hover:bg-indigo-700 active:scale-95 transition-all mt-4 disabled:opacity-50 disabled:active:scale-100">Войти</button>
              </form>
           </div>
@@ -365,14 +389,14 @@ export const SellerInterface: React.FC = () => {
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="p-4 border-b border-slate-50 relative group hidden md:block">
-            {/* DESKTOP HEADER ROW */}
-            <div className="grid grid-cols-[70px_100px_1.5fr_60px_80px_140px_20px] gap-4 px-3 text-[9px] font-black uppercase text-slate-400 tracking-wider">
-               <div>ORD</div>
+            {/* DESKTOP HEADER ROW - ALIGNED LEFT (FORCED) */}
+            <div className="grid grid-cols-[70px_100px_1.5fr_60px_80px_140px_20px] gap-4 px-3 text-[9px] font-black uppercase text-slate-400 tracking-wider text-left">
+               <div>№ заказа</div>
                <div>Марка</div>
                <div>Модель</div>
                <div>Год</div>
-               <div className="text-right">Дата</div>
-               <div className="text-right">Статус</div>
+               <div>Дата</div>
+               <div>Статус</div>
                <div></div>
             </div>
         </div>
@@ -386,7 +410,6 @@ export const SellerInterface: React.FC = () => {
           const isDisabled = order.isProcessed === true;
           const canSubmit = isOrderValid(order);
           
-          // Check if all items are refused (qty = 0)
           const isAllDeclined = order.items.every(item => {
               const stateKey = `${order.id}-${item.name}`;
               const state = editingItems[stateKey];
@@ -394,7 +417,6 @@ export const SellerInterface: React.FC = () => {
               return qty === 0;
           });
           
-          // Helper to split Brand/Model with Admin overrides
           const fullModel = order.car?.AdminModel || order.car?.model || 'N/A';
           const brandPart = fullModel.split(' ')[0] || '-';
           const modelPart = fullModel.split(' ').slice(1).join(' ') || '-';
@@ -404,8 +426,8 @@ export const SellerInterface: React.FC = () => {
 
           return (
             <div key={order.id} className={`transition-all duration-500 border-l-4 ${containerStyle}`}>
-              {/* ROW CONTENT */}
-              <div onClick={() => !isVanishing && setExpandedId(isExpanded ? null : order.id)} className="p-3 cursor-pointer select-none grid grid-cols-1 md:grid-cols-[70px_100px_1.5fr_60px_80px_140px_20px] gap-3 md:gap-4 items-center text-[10px]">
+              {/* ROW CONTENT - ALIGNED LEFT */}
+              <div onClick={() => !isVanishing && setExpandedId(isExpanded ? null : order.id)} className="p-3 cursor-pointer select-none grid grid-cols-1 md:grid-cols-[70px_100px_1.5fr_60px_80px_140px_20px] gap-3 md:gap-4 items-center text-[10px] text-left">
                   
                   {/* ID */}
                   <div className="font-mono font-bold truncate flex items-center gap-2">
@@ -431,14 +453,14 @@ export const SellerInterface: React.FC = () => {
                      {displayYear}
                   </div>
 
-                  {/* DATE */}
-                  <div className="font-bold text-slate-400 md:text-right flex items-center md:justify-end gap-1">
+                  {/* DATE - FORCED LEFT */}
+                  <div className="font-bold text-slate-400 flex items-center gap-1">
                      <span className="md:hidden text-slate-400 mr-2">Дата:</span>
                      {order.createdAt.split(/[\n,]/)[0]}
                   </div>
 
-                  {/* STATUS */}
-                  <div className="flex justify-end">
+                  {/* STATUS - FORCED LEFT */}
+                  <div className="flex justify-start">
                     <div className={`px-2 py-1 rounded-md font-black text-[8px] uppercase border flex items-center gap-1.5 shadow-sm ${statusInfo.color}`}>
                         {statusInfo.icon}
                         {statusInfo.label}
@@ -454,16 +476,17 @@ export const SellerInterface: React.FC = () => {
               {isExpanded && !isVanishing && (
                 <div className="p-4 bg-white border-t border-slate-100 animate-in fade-in duration-200" onClick={e => e.stopPropagation()}>
                   
-                  {/* DETAILED CAR INFO BLOCK */}
                   <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-4 text-[10px] shadow-sm">
                       <div className="flex items-center gap-2 mb-3">
                          <FileText size={12} className="text-slate-400"/> 
                          <span className="font-black uppercase text-slate-500">Характеристики автомобиля</span>
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
-                         <div>
+                         <div className="group relative cursor-pointer" onClick={() => copyToClipboard(order.vin)}>
                             <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">VIN</span>
-                            <span className="font-mono font-black text-slate-800 bg-white px-2 py-1 rounded border border-slate-200 inline-block">{order.vin}</span>
+                            <span className="font-mono font-black text-slate-800 bg-white px-2 py-1 rounded border border-slate-200 inline-flex items-center gap-2 group-hover:border-indigo-300 group-hover:text-indigo-600 transition-all">
+                                {order.vin} <Copy size={10} className="opacity-0 group-hover:opacity-100 transition-opacity"/>
+                            </span>
                          </div>
                          <div>
                             <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Марка</span>
@@ -488,9 +511,10 @@ export const SellerInterface: React.FC = () => {
                       {order.items.map(item => {
                         const stateKey = `${order.id}-${item.name}`;
                         const offerItem = myOffer?.items.find(i => i.name === item.name);
+                        // DEFAULT CURRENCY CNY
                         const state = editingItems[stateKey] || { 
                           price: offerItem?.sellerPrice || 0, 
-                          currency: offerItem?.sellerCurrency || 'RUB', 
+                          currency: offerItem?.sellerCurrency || 'CNY', 
                           offeredQty: offerItem?.offeredQuantity || item.quantity, 
                           refImage: offerItem?.refImage || '' 
                         };
@@ -501,7 +525,6 @@ export const SellerInterface: React.FC = () => {
                         const isQtyDeficit = state.offeredQty < item.quantity;
                         const isUnavailable = state.offeredQty === 0;
                         
-                        // Use Admin overrides for display
                         const displayName = item.AdminName || item.name;
                         const displayQty = item.AdminQuantity || item.quantity;
 
@@ -510,15 +533,14 @@ export const SellerInterface: React.FC = () => {
                             const digits = raw.replace(/\D/g, '');
                             let val = parseInt(digits) || 0;
                             if (max && val > max) val = max;
-                            // Limit price to 1,000,000
-                            if (field === 'price' && val > 1000000) val = 0; 
+                            // Limit price to 1,000,000 (CAP IT, DON'T RESET TO 0)
+                            if (field === 'price' && val > 1000000) val = 1000000; 
 
                             setEditingItems(prev => ({ ...prev, [stateKey]: { ...(prev[stateKey] || state), [field]: val } }));
                         };
 
                         const toggleUnavailable = () => {
                            if (isDisabled || !!myOffer) return;
-                           // If currently 0, restore to full qty. If not 0, set to 0.
                            const newVal = state.offeredQty === 0 ? displayQty : 0;
                            setEditingItems(prev => ({ ...prev, [stateKey]: { ...(prev[stateKey] || state), offeredQty: newVal } }));
                         };
@@ -531,7 +553,6 @@ export const SellerInterface: React.FC = () => {
                                     {isWinner && <span className="bg-emerald-600 text-white px-1.5 py-0.5 rounded text-[7px] font-black uppercase">Выбрано</span>}
                                     {isDisabled && !isWinner && isPartialWin && <span className="bg-slate-200 text-slate-500 px-1.5 py-0.5 rounded text-[7px] font-black uppercase">В резерве</span>}
                                     
-                                    {/* STATUS TAGS */}
                                     {!isUnavailable && isQtyDeficit && <span className="bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded text-[7px] font-black uppercase flex items-center gap-1"><AlertTriangle size={8}/> Дефицит</span>}
                                     {!isUnavailable && isPriceEmpty && <span className="bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded text-[7px] font-black uppercase flex items-center gap-1 animate-pulse"><AlertCircle size={8}/> Укажите цену</span>}
                                     {isUnavailable && <span className="bg-red-100 text-red-600 px-1.5 py-0.5 rounded text-[7px] font-black uppercase flex items-center gap-1">Нет в наличии</span>}
@@ -565,9 +586,9 @@ export const SellerInterface: React.FC = () => {
                                 <div className="w-16 space-y-1">
                                     <label className="text-[7px] font-bold text-slate-400 uppercase block text-center">Валюта</label>
                                     <select disabled={isDisabled || !!myOffer || isUnavailable} value={state.currency} onChange={e => setEditingItems(prev => ({...prev, [stateKey]: {...(prev[stateKey] || state), currency: e.target.value as Currency}}))} className="w-full text-center font-bold text-[10px] border border-slate-200 rounded-lg py-1.5 bg-white disabled:bg-slate-50 outline-none focus:border-indigo-500">
+                                        <option value="CNY">CNY</option>
                                         <option value="RUB">RUB</option>
                                         <option value="USD">USD</option>
-                                        <option value="CNY">CNY</option>
                                     </select>
                                 </div>
                              </div>
@@ -587,9 +608,14 @@ export const SellerInterface: React.FC = () => {
                         </div>
                       )}
                       {isDisabled && (
-                        <div className="flex items-center gap-2 justify-center py-2 bg-slate-50 rounded-lg border border-slate-200 border-dashed">
+                        <div className="flex items-center gap-2 justify-center py-3 bg-slate-50 rounded-lg border border-slate-200 border-dashed text-center">
                            <ShieldCheck size={14} className="text-slate-400"/>
-                           <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Заказ обработан админом. Редактирование закрыто.</span>
+                           <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest leading-relaxed">
+                               {statusInfo.label === 'ЧАСТИЧНО' ? 'ЗАКАЗ ОБРАБОТАН. ЕСТЬ ПОЗИЦИИ, КОТОРЫЕ УТВЕРЖДЕНЫ К ПОКУПКЕ. СВЯЖИТЕСЬ С МЕНЕДЖЕРОМ CHINA-NAI' :
+                                statusInfo.label === 'ВЫИГРАЛ' ? 'ЗАКАЗ ОБРАБОТАН. ВЫ ВЫИГРАЛИ ПО ВСЕМ ПОЗИЦИЯМ. СВЯЖИТЕСЬ С МЕНЕДЖЕРОМ CHINA-NAI.' :
+                                statusInfo.label === 'ПРОИГРАЛ' ? 'ЗАКАЗ ОБРАБОТАН. ВАШЕ ПРЕДЛОЖЕНИЕ НЕ ПОДХОДИТ.' :
+                                'ЗАКАЗ ОБРАБОТАН АДМИНОМ. РЕДАКТИРОВАНИЕ ЗАКРЫТО.'}
+                           </span>
                         </div>
                       )}
                   </div>

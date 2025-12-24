@@ -43,6 +43,7 @@ export const AdminInterface: React.FC = () => {
 
   // New Modal State replacing window.confirm/alert
   const [adminModal, setAdminModal] = useState<AdminModalState | null>(null);
+  const [refusalReason, setRefusalReason] = useState("");
 
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
@@ -89,7 +90,8 @@ export const AdminInterface: React.FC = () => {
       orderId: string, 
       sellerName: string,
       currentAdminPrice: number,
-      currentAdminCurrency: Currency
+      currentAdminCurrency: Currency,
+      isCurrentlyLeader: boolean
   ) => {
     const inputKey = `${orderId}-${offerId}-${itemName}`;
     const inputState = adminInputs[inputKey];
@@ -110,10 +112,15 @@ export const AdminInterface: React.FC = () => {
           ...off,
           items: off.items.map(it => {
             if (it.name.trim().toLowerCase() === targetItemName) {
-              if (off.id === offerId) {
-                  return { ...it, rank: 'ЛИДЕР', adminPrice: finalPrice, adminCurrency: finalCurrency };
-              } else {
+              if (isCurrentlyLeader) {
+                  // If unselecting, reset to RESERVE
                   return { ...it, rank: 'РЕЗЕРВ' };
+              } else {
+                  if (off.id === offerId) {
+                      return { ...it, rank: 'ЛИДЕР', adminPrice: finalPrice, adminCurrency: finalCurrency };
+                  } else {
+                      return { ...it, rank: 'РЕЗЕРВ' };
+                  }
               }
             }
             return it;
@@ -123,7 +130,8 @@ export const AdminInterface: React.FC = () => {
     }));
     
     try {
-      await SheetService.updateRank(vin, itemName, offerId, finalPrice, finalCurrency);
+      // Pass 'RESET' action type if we are unselecting a leader
+      await SheetService.updateRank(vin, itemName, offerId, finalPrice, finalCurrency, isCurrentlyLeader ? 'RESET' : undefined);
       addLog(`Подтверждено: ${itemName}`, "success");
     } catch (e) {
       addLog(`Ошибка обновления`, "error");
@@ -168,6 +176,19 @@ export const AdminInterface: React.FC = () => {
     const missingLeaders: string[] = [];
     const safeItems = order.items || [];
     const safeOffers = order.offers || [];
+
+    // Check if at least 1 offer exists globally for this order
+    const globalOffersCount = safeOffers.length;
+    // Check if at least 1 offer exists for ANY item
+    let hasAnyOffer = false;
+    safeOffers.forEach(off => {
+        if (off.items.some(i => (i.offeredQuantity || 0) > 0)) hasAnyOffer = true;
+    });
+
+    if (globalOffersCount === 0) {
+        // Button should be disabled ideally, but if clicked:
+        return; 
+    }
 
     safeItems.forEach(item => {
         const itemNameLower = (item.name || '').trim().toLowerCase();
@@ -260,6 +281,7 @@ export const AdminInterface: React.FC = () => {
   const handleAnnulOrder = (e: React.MouseEvent, orderId: string) => {
       e.stopPropagation();
       e.preventDefault(); 
+      setRefusalReason("");
       setAdminModal({
           type: 'ANNUL',
           orderId: orderId
@@ -268,6 +290,11 @@ export const AdminInterface: React.FC = () => {
 
   const processAnnulment = async () => {
       if (!adminModal?.orderId) return;
+      if (!refusalReason.trim()) {
+          alert("Пожалуйста, укажите причину аннулирования.");
+          return;
+      }
+      
       const orderId = adminModal.orderId;
       setAdminModal(null); 
 
@@ -275,9 +302,10 @@ export const AdminInterface: React.FC = () => {
       setVanishingIds(prev => new Set(prev).add(orderId));
       
       try {
-          await SheetService.refuseOrder(orderId);
+          // Explicitly pass 'ADMIN' as source
+          await SheetService.refuseOrder(orderId, refusalReason, 'ADMIN');
           setTimeout(() => {
-              setOrders(prev => prev.map(o => o.id === orderId ? { ...o, isRefused: true } : o));
+              setOrders(prev => prev.map(o => o.id === orderId ? { ...o, isRefused: true, refusalReason: refusalReason } : o));
               setVanishingIds(prev => { const n = new Set(prev); n.delete(orderId); return n; });
               setIsSubmitting(null);
               fetchData(true);
@@ -327,11 +355,18 @@ export const AdminInterface: React.FC = () => {
                           <>
                             <div>
                                 <h3 className="text-lg font-black uppercase text-slate-900">Аннулировать заказ?</h3>
-                                <p className="text-xs text-slate-500 font-bold mt-1">Это действие необратимо. Заказ {adminModal.orderId} будет перемещен в архив со статусом "Аннулирован".</p>
+                                <p className="text-xs text-slate-500 font-bold mt-1">Это действие необратимо. Заказ {adminModal.orderId} будет перемещен в архив.</p>
                             </div>
+                            <textarea 
+                                autoFocus
+                                value={refusalReason}
+                                onChange={(e) => setRefusalReason(e.target.value)}
+                                placeholder="Укажите причину аннулирования..."
+                                className="w-full h-20 p-3 bg-slate-50 border border-slate-200 rounded-xl text-[10px] font-bold outline-none resize-none focus:border-red-300"
+                            />
                             <div className="grid grid-cols-2 gap-3 w-full mt-2">
                                 <button onClick={() => setAdminModal(null)} className="py-3 rounded-xl bg-slate-100 text-slate-600 font-bold text-xs uppercase hover:bg-slate-200 transition-colors">Нет, назад</button>
-                                <button onClick={processAnnulment} className="py-3 rounded-xl bg-red-600 text-white font-black text-xs uppercase hover:bg-red-700 transition-colors shadow-lg shadow-red-200">Да, аннулировать</button>
+                                <button onClick={processAnnulment} disabled={!refusalReason.trim()} className="py-3 rounded-xl bg-red-600 text-white font-black text-xs uppercase hover:bg-red-700 transition-colors shadow-lg shadow-red-200 disabled:opacity-50">Аннулировать</button>
                             </div>
                           </>
                       )}
@@ -411,6 +446,7 @@ export const AdminInterface: React.FC = () => {
           const offersCount = order.offers?.length || 0;
           const hasOffers = offersCount > 0;
           const currentData = isEditing ? editForm : order;
+          const hasAnyValidOffer = (order.offers || []).some(o => (o.items || []).some(i => (i.offeredQuantity || 0) > 0));
 
           return (
             <div key={order.id} className={`transition-all duration-500 border-l-4 ${containerStyle}`}>
@@ -463,7 +499,12 @@ export const AdminInterface: React.FC = () => {
                         const effectiveItemName = isEditing ? item.name : (item.AdminName || item.name);
                         const originalName = order.items[idx]?.name || item.name;
                         const targetItemName = originalName.trim().toLowerCase();
+                        
                         const detailOffers = (order.offers || []).flatMap(off => off.items.filter(i => i.name.trim().toLowerCase() === targetItemName).map(i => ({ ...i, sellerName: off.clientName, offerId: off.id })));
+                        
+                        const noStockOffers = detailOffers.filter(o => (o.offeredQuantity || 0) === 0);
+                        const validOffers = detailOffers.filter(o => (o.offeredQuantity || 0) > 0);
+                        const hasNoValidOffers = validOffers.length === 0;
 
                         return (
                           <div key={idx} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -474,12 +515,12 @@ export const AdminInterface: React.FC = () => {
                                          <input type="number" value={item.quantity} onChange={e => { const newItems = [...editForm.items]; newItems[idx].quantity = parseInt(e.target.value); setEditForm({...editForm, items: newItems}); }} className="bg-transparent border-b border-blue-300 outline-none w-1/6 text-[10px] font-black uppercase text-blue-900 text-center" />
                                      </div>
                                  ) : (
-                                     <span className="text-[9px] font-black uppercase">{effectiveItemName} ({item.AdminQuantity || item.quantity} шт)</span>
+                                     <span className={`text-[9px] font-black uppercase ${hasNoValidOffers && detailOffers.length > 0 ? 'line-through text-red-300' : ''}`}>{effectiveItemName} ({item.AdminQuantity || item.quantity} шт)</span>
                                  )}
                              </div>
                              
                              <div className="divide-y divide-slate-100">
-                                {detailOffers.map((off, oIdx) => {
+                                {validOffers.map((off, oIdx) => {
                                   const isLeader = off.rank === 'ЛИДЕР';
                                   const inputKey = `${order.id}-${off.offerId}-${originalName}`;
                                   const currentInput = adminInputs[inputKey];
@@ -489,7 +530,7 @@ export const AdminInterface: React.FC = () => {
                                   return (
                                     <div key={oIdx} className={`p-3 grid grid-cols-[1fr_100px_70px_100px] gap-4 items-center ${isLeader ? 'bg-emerald-50/30' : ''}`}>
                                        <div className="flex items-center gap-4 min-w-0">
-                                          <div className="flex flex-col truncate"><span className="text-[10px] font-black uppercase truncate">{off.sellerName}</span><span className="text-[9px] text-slate-500">Закуп: {off.sellerPrice} {off.sellerCurrency}</span></div>
+                                          <div className="flex flex-col truncate"><span className="text-[10px] font-black uppercase truncate">{off.sellerName}</span><span className="text-[9px] text-slate-500">Закуп: {off.sellerPrice} {off.sellerCurrency} | Кол-во: {off.offeredQuantity}</span></div>
                                        </div>
                                        <div className="flex items-center bg-white border border-slate-200 rounded-lg h-8 px-2 shadow-sm focus-within:ring-1 focus-within:ring-indigo-200">
                                           <input type="text" value={valPrice || ''} onChange={e => { const digits = e.target.value.replace(/\D/g, ''); let v = parseInt(digits) || 0; setAdminInputs(prev => ({...prev, [inputKey]: {...(prev[inputKey] || {currency: valCurrency}), price: v}})); }} className="w-full text-center text-[10px] font-bold bg-transparent outline-none placeholder:text-slate-300" placeholder="0" />
@@ -499,7 +540,7 @@ export const AdminInterface: React.FC = () => {
                                        </div>
                                        <div className="flex justify-end">
                                           {!order.isRefused && (
-                                              <button type="button" onClick={() => handleUpdateRank(order.vin, originalName, off.offerId, order.id, off.sellerName, valPrice, valCurrency)} className={`w-full h-8 rounded-lg text-[9px] font-black uppercase shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1 ${isLeader ? 'bg-emerald-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}`}>
+                                              <button type="button" onClick={() => handleUpdateRank(order.vin, originalName, off.offerId, order.id, off.sellerName, valPrice, valCurrency, isLeader)} className={`w-full h-8 rounded-lg text-[9px] font-black uppercase shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1 ${isLeader ? 'bg-emerald-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}`}>
                                                   {isLeader ? <><CheckCircle2 size={12}/> Лидер</> : 'Выбрать'}
                                               </button>
                                           )}
@@ -507,6 +548,13 @@ export const AdminInterface: React.FC = () => {
                                     </div>
                                   );
                                 })}
+
+                                {noStockOffers.length > 0 && (
+                                    <div className="p-3 bg-red-50/30 text-[9px] font-bold text-red-400">
+                                        <span className="uppercase">Нет в наличии:</span> {noStockOffers.map(o => o.sellerName).join(', ')}
+                                    </div>
+                                )}
+
                                 {detailOffers.length === 0 && <div className="p-3 text-center text-[9px] text-slate-400 italic">Нет предложений по этой позиции</div>}
                              </div>
                           </div>
@@ -538,7 +586,7 @@ export const AdminInterface: React.FC = () => {
                                   
                                   <div className="w-[1px] h-8 bg-slate-200"></div>
 
-                                  <button type="button" onClick={(e) => handleFormCP(e, order)} disabled={!!isProcessingAction} className="px-8 py-2.5 bg-slate-900 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-slate-800 transition-all shadow-lg active:scale-95 disabled:opacity-50 min-w-[140px] flex justify-center">
+                                  <button type="button" onClick={(e) => handleFormCP(e, order)} disabled={!!isProcessingAction || !hasAnyValidOffer} className="px-8 py-2.5 bg-slate-900 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-slate-800 transition-all shadow-lg active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed min-w-[140px] flex justify-center">
                                       {isProcessingAction ? <Loader2 size={14} className="animate-spin"/> : 'Утвердить КП'}
                                   </button>
                               </>
