@@ -131,45 +131,17 @@ export const AdminInterface: React.FC = () => {
     }
   };
 
-  const handleFormCP = async (e: React.MouseEvent, order: Order) => {
-    e.stopPropagation(); 
-    e.preventDefault();
+  // Logic extracted to be callable from both direct click and modal confirmation
+  const executeApproval = async (orderId: string) => {
+    setAdminModal(null);
+    interactionLock.current = Date.now();
+    setIsSubmitting(orderId);
+    setApprovedIds(prev => new Set(prev).add(orderId));
+    setExpandedTenders(prev => ({ ...prev, [orderId]: false })); 
+    setSuccessToast({ message: `КП по заказу ${orderId} сформировано`, id: Date.now().toString() });
+    setTimeout(() => setSuccessToast(null), 3000);
 
     try {
-        const missingLeaders: string[] = [];
-        const safeItems = order.items || [];
-        const safeOffers = order.offers || [];
-
-        safeItems.forEach(item => {
-            const itemNameLower = (item.name || '').trim().toLowerCase();
-            const hasLeader = safeOffers.some(off => 
-                (off.items || []).some(offItem => {
-                    const offNameLower = (offItem.name || '').trim().toLowerCase();
-                    return offNameLower === itemNameLower && (offItem.rank === 'ЛИДЕР' || offItem.rank === 'LEADER');
-                })
-            );
-            if (!hasLeader) {
-                missingLeaders.push(item.AdminName || item.name || 'Без названия');
-            }
-        });
-
-        if (missingLeaders.length > 0) {
-            // Replaced alert with Custom Modal
-            setAdminModal({
-                type: 'VALIDATION',
-                missingItems: missingLeaders
-            });
-            return;
-        }
-
-        const orderId = order.id;
-        interactionLock.current = Date.now();
-        setIsSubmitting(orderId);
-        setApprovedIds(prev => new Set(prev).add(orderId));
-        setExpandedTenders(prev => ({ ...prev, [orderId]: false })); 
-        setSuccessToast({ message: `КП по заказу ${orderId} сформировано`, id: Date.now().toString() });
-        setTimeout(() => setSuccessToast(null), 3000);
-
         await SheetService.formCP(orderId);
         setEditingOrderId(null);
         setApprovedIds(prev => { const n = new Set(prev); n.delete(orderId); return n; });
@@ -181,13 +153,45 @@ export const AdminInterface: React.FC = () => {
             setIsSubmitting(null);
             fetchData(true);
         }, 700);
-
     } catch (err) {
         console.error("Error approving CP:", err);
-        alert("Произошла ошибка при утверждении КП. Проверьте консоль.");
-        setApprovedIds(prev => { const n = new Set(prev); n.delete(order.id); return n; });
+        alert("Произошла ошибка при утверждении КП.");
+        setApprovedIds(prev => { const n = new Set(prev); n.delete(orderId); return n; });
         setIsSubmitting(null);
     }
+  };
+
+  const handleFormCP = async (e: React.MouseEvent, order: Order) => {
+    e.stopPropagation(); 
+    e.preventDefault();
+
+    const missingLeaders: string[] = [];
+    const safeItems = order.items || [];
+    const safeOffers = order.offers || [];
+
+    safeItems.forEach(item => {
+        const itemNameLower = (item.name || '').trim().toLowerCase();
+        const hasLeader = safeOffers.some(off => 
+            (off.items || []).some(offItem => {
+                const offNameLower = (offItem.name || '').trim().toLowerCase();
+                return offNameLower === itemNameLower && (offItem.rank === 'ЛИДЕР' || offItem.rank === 'LEADER');
+            })
+        );
+        if (!hasLeader) {
+            missingLeaders.push(item.AdminName || item.name || 'Без названия');
+        }
+    });
+
+    if (missingLeaders.length > 0) {
+        setAdminModal({
+            type: 'VALIDATION',
+            missingItems: missingLeaders,
+            orderId: order.id
+        });
+        return;
+    }
+
+    executeApproval(order.id);
   };
 
   const startEditing = (e: React.MouseEvent, order: Order) => {
@@ -253,7 +257,6 @@ export const AdminInterface: React.FC = () => {
       setEditForm(null);
   };
 
-  // 1. Opens the modal
   const handleAnnulOrder = (e: React.MouseEvent, orderId: string) => {
       e.stopPropagation();
       e.preventDefault(); 
@@ -263,11 +266,10 @@ export const AdminInterface: React.FC = () => {
       });
   };
 
-  // 2. Performs the action
   const processAnnulment = async () => {
       if (!adminModal?.orderId) return;
       const orderId = adminModal.orderId;
-      setAdminModal(null); // Close modal immediately
+      setAdminModal(null); 
 
       setIsSubmitting(orderId);
       setVanishingIds(prev => new Set(prev).add(orderId));
@@ -337,7 +339,7 @@ export const AdminInterface: React.FC = () => {
                       {adminModal.type === 'VALIDATION' && (
                           <>
                              <div>
-                                <h3 className="text-lg font-black uppercase text-slate-900">Невозможно утвердить КП</h3>
+                                <h3 className="text-lg font-black uppercase text-slate-900">Вы уверены, что хотите утвердить КП?</h3>
                                 <p className="text-xs text-slate-500 font-bold mt-2">Не выбран поставщик (ЛИДЕР) для позиций:</p>
                                 <div className="mt-3 bg-red-50 rounded-xl p-3 text-left border border-red-100">
                                     <ul className="list-disc pl-4 space-y-1">
@@ -346,9 +348,12 @@ export const AdminInterface: React.FC = () => {
                                         ))}
                                     </ul>
                                 </div>
-                                <p className="text-[10px] text-slate-400 font-bold mt-3">Пожалуйста, отметьте галочкой предложения поставщиков для каждой позиции.</p>
+                                <p className="text-[10px] text-slate-400 font-bold mt-3">Пожалуйста, отметьте галочкой предложения поставщиков для каждой позиции или продолжите без них.</p>
                             </div>
-                            <button onClick={() => setAdminModal(null)} className="w-full py-3 rounded-xl bg-slate-900 text-white font-black text-xs uppercase hover:bg-slate-800 transition-colors mt-2">Понятно</button>
+                            <div className="grid grid-cols-2 gap-3 w-full mt-2">
+                                <button onClick={() => setAdminModal(null)} className="py-3 rounded-xl bg-slate-100 text-slate-600 font-bold text-xs uppercase hover:bg-slate-200 transition-colors">Отмена</button>
+                                <button onClick={() => adminModal.orderId && executeApproval(adminModal.orderId)} className="py-3 rounded-xl bg-slate-900 text-white font-black text-xs uppercase hover:bg-slate-800 transition-colors">Продолжить</button>
+                            </div>
                           </>
                       )}
                   </div>
