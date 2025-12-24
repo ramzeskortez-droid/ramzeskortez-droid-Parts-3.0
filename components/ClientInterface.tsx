@@ -1,11 +1,25 @@
-
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { SheetService } from '../services/sheetService';
 import { Order, OrderStatus, PartCategory } from '../types';
 import { Pagination } from './Pagination';
 import { 
-  Send, Plus, Trash2, Zap, CheckCircle2, Car, MoreHorizontal, Calculator, Search, Loader2, ChevronDown, ShoppingCart, Archive, UserCircle2, LogOut, ShieldCheck, Phone
+  Send, Plus, Trash2, Zap, CheckCircle2, Car, MoreHorizontal, Calculator, Search, Loader2, ChevronDown, ShoppingCart, Archive, UserCircle2, LogOut, ShieldCheck, Phone, X
 } from 'lucide-react';
+
+// --- DATA CONSTANTS ---
+
+const POPULAR_BRANDS_LIST = [
+  "Lada (ВАЗ)", "Audi", "BMW", "Changan", "Chery", "Chevrolet", "Daewoo", "Ford", "Geely", "Haval", "Honda", "Hyundai", 
+  "Jaecoo", "JETOUR", "Kia", "Land Rover", "Lexus", "Mazda", "Mercedes-Benz", "Mitsubishi", "Nissan", "Omoda", "Opel", 
+  "Peugeot", "Renault", "Skoda", "Subaru", "TENET", "Toyota", "Volkswagen"
+];
+
+const ALL_BRANDS_LIST = [
+  "Abarth", "AC", "Acura", "Adam", "Adler", "Aito", "Aiways", "Aixam", "Alfa Romeo", "Alpina", "Alpine", "AM General", "Ambertruck", "AMC", "Apal", "Arcfox", "Ariel", "Aro", "Asia", "Aston Martin", "Auburn", "Audi", "Aurus", "Austin", "Austin Healey", "Auto Union", "Autobianchi", "Avatr", "BAIC", "Bajaj", "Baltijas Dzips", "Baojun", "Batmobile", "BAW", "Belgee", "Bentley", "Bertone", "Bestune", "Bilenkin", "Bio Auto", "Bitter", "Blaval", "BMW", "Borgward", "Brabus", "Brilliance", "Bristol", "Bufori", "Bugatti", "Buick", "BYD", "Byvin", "Cadillac", "Callaway", "Carbodies", "Caterham", "Chana", "Changan", "Changfeng", "Changhe", "Chery", "Chevrolet", "Chrysler", "Ciimo (Dongfeng-Honda)", "Citroen", "Cizeta", "Coda", "Coggiola", "Cord", "Cowin", "Cupra", "Dacia", "Dadi", "Daewoo", "Daihatsu", "Daimler", "Dallara", "Datsun", "Dayun", "De Tomaso", "Deco Rides", "Delage", "DeLorean", "Denza", "Derways", "DeSoto", "DKW", "Dodge", "Dongfeng", "Doninvest", "Donkervoort", "DR", "DS", "DW Hower", "E-Car", "Eagle", "Eagle Cars", "Enovate (Enoreve)", "Eonyx", "Everus", "Evolute", "Excalibur", "Exeed", "Facel Vega", "FAW", "Ferrari", "Fiat", "Fisker", "Flanker", "Ford", "Forthing", "Foton", "Franklin", "FSO", "FSR", "Fuqi", "GAC", "GAC Aion", "GAC Trumpchi", "Geely", "Genesis", "Geo", "GMA", "GMC", "Goggomobil", "Gonow", "Gordon", "GP", "Great Wall", "Hafei", "Haima", "Hanomag", "Hanteng", "Haval", "Hawtai", "Hedmos", "Heinkel", "Hennessey", "Hindustan", "HiPhi", "Hispano-Suiza", "Holden", "Honda", "Hongqi", "Horch", "Hozon", "HSV", "Huaihai (Hoann)", "HuangHai", "Huazi", "Hudson", "Humber", "Hummer", "Hycan", "Hyperion", "Hyundai", "iCar", "iCaur", "IM Motors (Zhiji)", "Ineos", "Infiniti", "Innocenti", "International Harvester", "Invicta", "Iran Khodro", "Isdera", "Isuzu", "Iveco", "JAC", "Jaecoo", "Jaguar", "Jeep", "Jensen", "JETOUR", "Jetta", "Jiangnan", "Jidu", "Jinbei", "JMC", "JMEV", "Jonway", "Kaiyi", "Karma", "Kawei", "KGM", "Kia", "Knewstar", "Koenigsegg", "KTM AG", "KYC", "Lada (ВАЗ)", "Lamborghini", "Lancia", "Land Rover", "Landwind", "Leapmotor", "Letin", "LEVC", "Lexus", "Li Auto (Lixiang)", "Liebao Motor", "Lifan", "Ligier", "Lincoln", "Lingxi", "Livan", "Logem", "Lotus", "LTI", "Lucid", "Luxeed", "Luxgen", "Lynk & Co", "M-Hero", "Maextro", "Mahindra", "Maple", "Marcos", "Marlin", "Marussia", "Maruti", "Maserati", "Matra", "Maxus", "Maybach", "Mazda", "McLaren", "Mega", "Mercedes-Benz", "Mercury", "Merkur", "Messerschmitt", "Metrocab", "MG", "Micro", "Microcar", "Minelli", "Mini", "Mitsubishi", "Mitsuoka", "Mobilize", "Morgan", "Morris", "Nash", "Nio", "Nissan", "Noble", "Nordcross", "Oldsmobile", "Oltcit", "Omoda", "Opel", "Ora", "Orange", "Osca", "Oshan", "Oting", "Overland", "Packard", "Pagani", "Panoz", "Perodua", "Peugeot", "PGO", "Piaggio", "Pierce-Arrow", "Plymouth", "Polar Stone (Jishi)", "Polestar", "Pontiac", "Porsche", "Premier", "Proton", "Puch", "Puma", "Punk", "Qiantu", "Qingling", "Qoros", "Qvale", "Radar", "Radford", "Ram", "Ravon", "Rayton Fissore", "Reliant", "Renaissance", "Renault", "Renault Samsung", "Rezvani", "Rimac", "Rinspeed", "Rising Auto", "Rivian", "Roewe", "Rolls-Royce", "Ronart", "Rossa", "Rover", "Rox", "Saab", "SAIC", "Saipa", "Saleen", "Sandstorm", "Santana", "Saturn", "Scion", "Scout", "Sears", "SEAT", "Seres", "Shanghai Maple", "ShuangHuan", "Simca", "Skoda", "Skywell", "Skyworth", "Smart", "Solaris", "Sollers", "Soueast", "Spectre", "Spyker", "SsangYong", "Stelato", "Steyr", "Studebaker", "Subaru", "Suzuki", "SWM", "Talbot", "Tank", "Tata", "Tatra", "Tazzari", "TENET", "Tesla", "Thairung", "Think", "Tianma", "Tianye", "Tofas", "Toyota", "Trabant", "Tramontana", "Triumph", "TVR", "Ultima", "Vauxhall", "Vector", "Venturi", "Venucia", "VGV", "VinFast", "Volga", "Volkswagen", "Volvo", "Vortex", "Voyah", "VUHL", "W Motors", "Wanderer", "Wartburg", "Weltmeister", "Westfield", "Wey", "Wiesmann", "Willys", "Wuling", "Xcite", "XEV", "Xiaomi", "Xin Kai", "Xpeng", "Yema", "Yipai", "Yudo", "Yulon", "Zastava", "Zeekr", "Zenos", "Zenvo", "Zhido", "Zibar", "Zotye", "Zubr", "ZX", "Автокам", "Амберавто", "Атом", "ГАЗ", "ЗАЗ", "ЗИЛ", "ЗиС", "Иж", "Канонир", "Комбат", "ЛуАЗ", "Москвич", "Руссо-Балт", "СМЗ", "Спортивные авто и реплики", "ТагАЗ", "УАЗ", "Яндекс Ровер", "Ё-мобиль"
+];
+
+// Combine unique sets
+const FULL_BRAND_SET = new Set([...POPULAR_BRANDS_LIST, ...ALL_BRANDS_LIST]);
 
 export const ClientInterface: React.FC = () => {
   // Auth state
@@ -18,9 +32,14 @@ export const ClientInterface: React.FC = () => {
 
   // Form state
   const [vin, setVin] = useState('');
-  const [car, setCar] = useState({ model: '', bodyType: '', year: '', engine: '', transmission: '' });
+  const [car, setCar] = useState({ brand: '', model: '', bodyType: '', year: '', engine: '', transmission: '' });
   const [items, setItems] = useState([{ name: '', quantity: 1, color: '', category: 'Оригинал' as PartCategory, refImage: '' }]);
   
+  // Brand Combobox State
+  const [isBrandOpen, setIsBrandOpen] = useState(false);
+  const brandListRef = useRef<HTMLDivElement>(null);
+  const brandInputRef = useRef<HTMLInputElement>(null);
+
   // Data state
   const [orders, setOrders] = useState<Order[]>([]);
   const [activeTab, setActiveTab] = useState<'processed' | 'archive'>('processed');
@@ -50,9 +69,61 @@ export const ClientInterface: React.FC = () => {
     setCurrentPage(1);
   }, [activeTab]);
 
+  // Click outside handler for brand dropdown
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+        if (brandListRef.current && !brandListRef.current.contains(event.target as Node) && 
+            brandInputRef.current && !brandInputRef.current.contains(event.target as Node)) {
+            setIsBrandOpen(false);
+        }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // --- PHONE MASK LOGIC (Improved) ---
+  const formatPhoneNumber = (value: string) => {
+    // 1. Оставляем только цифры и обрезаем до 11 знаков (7 + 10 цифр), чтобы не было "сброса" при переполнении
+    let digits = value.replace(/\D/g, '').slice(0, 11);
+    
+    if (!digits) return '';
+
+    // Если первая цифра 8, меняем на 7. Если не 7, добавляем 7.
+    if (digits[0] === '8') digits = '7' + digits.slice(1);
+    else if (digits[0] !== '7') digits = '7' + digits;
+
+    // Форматируем
+    const match = digits.match(/^(\d{1})(\d{0,3})(\d{0,3})(\d{0,2})(\d{0,2})$/);
+    if (!match) return '+7'; // Fallback
+
+    let formatted = `+${match[1]}`;
+    if (match[2]) formatted += ` (${match[2]}`;
+    if (match[3]) formatted += `) ${match[3]}`;
+    if (match[4]) formatted += `-${match[4]}`;
+    if (match[5]) formatted += `-${match[5]}`;
+    
+    return formatted;
+  };
+
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    // Разрешаем стирать полностью
+    if (val.length < tempAuth.phone.length && val.replace(/\D/g, '').length <= 1) {
+         setTempAuth({...tempAuth, phone: ''});
+         return;
+    }
+    setTempAuth({...tempAuth, phone: formatPhoneNumber(val)});
+  };
+
+  const isPhoneValid = (phone: string) => {
+      // +7 (XXX) XXX-XX-XX -> 18 chars
+      return phone.length === 18;
+  };
+
   const handleLogin = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!tempAuth.name.trim()) return;
+    if (!isPhoneValid(tempAuth.phone)) return; // Блокируем сабмит если телефон не полный
     const authData = { name: tempAuth.name.trim().toUpperCase(), phone: tempAuth.phone.trim() };
     setClientAuth(authData);
     localStorage.setItem('client_auth', JSON.stringify(authData));
@@ -61,8 +132,8 @@ export const ClientInterface: React.FC = () => {
 
   const handleDemoLogin = (num: 1 | 2) => {
     const demo = num === 1 
-      ? { name: 'КЛИЕНТ № 1', phone: '778899' }
-      : { name: 'КЛИЕНТ № 2', phone: '667799' };
+      ? { name: 'КЛИЕНТ № 1', phone: '+7 (999) 111-22-33' }
+      : { name: 'КЛИЕНТ № 2', phone: '+7 (999) 444-55-66' };
     setClientAuth(demo);
     localStorage.setItem('client_auth', JSON.stringify(demo));
     setShowAuthModal(false);
@@ -76,6 +147,10 @@ export const ClientInterface: React.FC = () => {
 
   const updateItem = (index: number, field: string, value: any) => {
     const newItems = [...items];
+    if (field === 'quantity') {
+       // Limit quantity to 1000
+       value = Math.min(1000, Math.max(1, value));
+    }
     newItems[index] = { ...newItems[index], [field]: value };
     setItems(newItems);
   };
@@ -87,9 +162,24 @@ export const ClientInterface: React.FC = () => {
       return;
     }
 
+    if (!car.brand || !FULL_BRAND_SET.has(car.brand)) {
+        alert('Выберите корректную марку из списка.');
+        return;
+    }
+
+    if (!car.model) {
+        alert('Укажите модель авто.');
+        return;
+    }
+
+    const finalCar = {
+        ...car,
+        model: `${car.brand} ${car.model}`.trim()
+    };
+
     const tempId = `ORD-TX-${Date.now().toString().slice(-4)}`;
     const newOrder: any = {
-       id: tempId, vin: vin || 'N/A', clientName: clientAuth.name, car, items,
+       id: tempId, vin: vin || 'N/A', clientName: clientAuth.name, car: finalCar, items,
        status: OrderStatus.OPEN, createdAt: 'Отправка...', offers: [], readyToBuy: false
     };
 
@@ -98,10 +188,10 @@ export const ClientInterface: React.FC = () => {
     setTimeout(() => setSuccessToast(null), 3000);
 
     setVin('');
-    setCar({ model: '', bodyType: '', year: '', engine: '', transmission: '' });
+    setCar({ brand: '', model: '', bodyType: '', year: '', engine: '', transmission: '' });
     setItems([{ name: '', quantity: 1, color: '', category: 'Оригинал', refImage: '' }]);
 
-    SheetService.createOrder(vin, items, clientAuth.name, car).then(() => fetchOrders());
+    SheetService.createOrder(vin, items, clientAuth.name, finalCar).then(() => fetchOrders());
   };
 
   const handleConfirmPurchase = async (orderId: string) => {
@@ -127,14 +217,10 @@ export const ClientInterface: React.FC = () => {
   };
 
   const handleDemoForm = () => {
-    const demoCars = [
-      { model: 'BMW G30 5-Series', bodyType: 'Седан', year: '2022', engine: 'B48 2.0L', transmission: 'ZF8' },
-      { model: 'Audi A6 C8', bodyType: 'Универсал', year: '2021', engine: '3.0 TDI', transmission: 'S-tronic' }
-    ];
     const demoVins = ['WBA520373786', 'WAUZZZ4K2L001'];
-    const randomIdx = Math.floor(Math.random() * demoCars.length);
+    const randomIdx = Math.floor(Math.random() * demoVins.length);
     setVin(demoVins[randomIdx]);
-    setCar(demoCars[randomIdx]);
+    setCar({ brand: 'BMW', model: '5-Series G30', bodyType: 'Седан', year: '2022', engine: 'B48 2.0L', transmission: 'ZF8' });
     setItems([
       { name: 'Капот M-Style', quantity: 1, color: 'Черный', category: 'Оригинал', refImage: '' },
       { name: 'Фара Laser Right', quantity: 1, color: '', category: 'Б/У', refImage: '' }
@@ -164,6 +250,21 @@ export const ClientInterface: React.FC = () => {
           default: return '₽';
       }
   };
+
+  // Filter brands based on input
+  const filteredBrands = useMemo(() => {
+      const q = car.brand.toLowerCase();
+      if (!q) return POPULAR_BRANDS_LIST;
+      
+      const exactMatch = ALL_BRANDS_LIST.find(b => b.toLowerCase() === q);
+      // If exact match found and user hasn't typed more, show it + others? 
+      // Actually just filtering "All" is better if query is present
+      return ALL_BRANDS_LIST.filter(b => b.toLowerCase().includes(q));
+  }, [car.brand]);
+
+  const isValidBrand = useMemo(() => {
+      return !car.brand || FULL_BRAND_SET.has(car.brand);
+  }, [car.brand]);
 
   return (
     <div className="max-w-4xl mx-auto p-4 space-y-4">
@@ -212,9 +313,17 @@ export const ClientInterface: React.FC = () => {
                  </div>
                  <div className="space-y-1">
                     <label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Номер телефона</label>
-                    <input value={tempAuth.phone} onChange={e => setTempAuth({...tempAuth, phone: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-indigo-600" placeholder="778899..." />
+                    <input 
+                      value={tempAuth.phone} 
+                      onChange={handlePhoneChange} 
+                      className={`w-full px-4 py-3 bg-slate-50 border rounded-xl font-bold text-sm outline-none transition-colors ${tempAuth.phone && !isPhoneValid(tempAuth.phone) ? 'border-red-300 text-red-600 focus:border-red-500' : 'border-slate-200 focus:border-indigo-600'}`} 
+                      placeholder="+7 (XXX) XXX-XX-XX" 
+                    />
+                    {tempAuth.phone && !isPhoneValid(tempAuth.phone) && (
+                        <p className="text-[9px] font-bold text-red-500 ml-1">Номер введен не полностью</p>
+                    )}
                  </div>
-                 <button type="submit" className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl hover:bg-indigo-700 active:scale-95 transition-all mt-4">Создать аккаунт</button>
+                 <button type="submit" disabled={!tempAuth.name || !isPhoneValid(tempAuth.phone)} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl hover:bg-indigo-700 active:scale-95 transition-all mt-4 disabled:opacity-50 disabled:active:scale-100">Создать аккаунт</button>
              </form>
           </div>
         </div>
@@ -265,14 +374,67 @@ export const ClientInterface: React.FC = () => {
                 <label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Имя Клиента</label>
                 <input value={clientAuth?.name || ''} readOnly className="w-full px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-md text-[10px] font-bold uppercase text-slate-400 outline-none cursor-not-allowed" />
               </div>
-              <div className="md:col-span-2 grid grid-cols-2 md:grid-cols-4 gap-3">
+              
+              {/* CAR SELECTOR SECTION */}
+              <div className="md:col-span-2 grid grid-cols-2 md:grid-cols-3 gap-3">
+                  <div className="space-y-1 relative">
+                    <label className="text-[8px] font-bold text-slate-400 uppercase ml-1">Марка (Бренд)</label>
+                    <div className="relative">
+                        <input
+                            ref={brandInputRef}
+                            value={car.brand}
+                            onChange={(e) => {
+                                setCar({...car, brand: e.target.value});
+                                // Fix: Correct typo setIsBrandListOpen -> setIsBrandOpen
+                                setIsBrandOpen(true);
+                            }}
+                            // Fix: Correct typo setIsBrandListOpen -> setIsBrandOpen
+                            onFocus={() => setIsBrandOpen(true)}
+                            className={`w-full px-3 py-1.5 bg-white border rounded-md text-[10px] font-bold uppercase outline-none focus:border-indigo-500 ${isValidBrand ? 'border-slate-200' : 'border-red-400 text-red-600'}`}
+                            placeholder="Введите марку..."
+                        />
+                        <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400" />
+                    </div>
+                    {/* COMBOBOX DROPDOWN */}
+                    {isBrandOpen && (
+                        <div ref={brandListRef} className="absolute z-50 left-0 right-0 top-full mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-xl divide-y divide-slate-50 animate-in fade-in zoom-in-95 duration-100">
+                             {filteredBrands.length > 0 ? (
+                                filteredBrands.map((brand, idx) => (
+                                    <div 
+                                        key={brand} 
+                                        onClick={() => {
+                                            setCar({...car, brand});
+                                            // Fix: Correct typo setIsBrandListOpen -> setIsBrandOpen
+                                            setIsBrandOpen(false);
+                                        }}
+                                        className="px-3 py-2 text-[10px] font-bold text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 cursor-pointer uppercase"
+                                    >
+                                        {brand}
+                                    </div>
+                                ))
+                             ) : (
+                                <div className="px-3 py-2 text-[10px] text-slate-400 italic">Ничего не найдено</div>
+                             )}
+                        </div>
+                    )}
+                    {!isValidBrand && car.brand.length > 0 && !isBrandOpen && (
+                        <div className="text-[8px] font-bold text-red-500 mt-1 absolute -bottom-4 left-0">Выберите марку из списка</div>
+                    )}
+                  </div>
+
                   <div className="space-y-1">
                     <label className="text-[8px] font-bold text-slate-400 uppercase ml-1">Модель</label>
-                    <input value={car.model} onChange={e => setCar({...car, model: e.target.value})} className="w-full px-2 py-1 bg-white border border-slate-200 rounded text-[9px] font-bold" placeholder="BMW G30" />
+                    <input 
+                        value={car.model} 
+                        onChange={e => setCar({...car, model: e.target.value})} 
+                        className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-[10px] font-bold outline-none uppercase" 
+                        placeholder="Напишите модель (X5, Camry...)" 
+                    />
                   </div>
+
                   <div className="space-y-1">
-                    <label className="text-[8px] font-bold text-slate-400 uppercase ml-1">Год</label>
-                    <input value={car.year} onChange={e => setCar({...car, year: e.target.value})} className="w-full px-2 py-1 bg-white border border-slate-200 rounded text-[9px] font-bold text-center" placeholder="2022" />
+                    <label className="text-[8px] font-bold text-slate-400 uppercase ml-1">Год выпуска</label>
+                    <input value={car.year} onChange={e => setCar({...car, year: e.target.value})} className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-md text-[10px] font-bold text-center" placeholder="202X" />
                   </div>
               </div>
           </div>
@@ -284,7 +446,13 @@ export const ClientInterface: React.FC = () => {
                 <div className="flex-grow bg-white p-3 rounded-xl border border-slate-200 shadow-sm space-y-3">
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
                     <div className="md:col-span-2">
-                      <input value={item.name} onChange={e => updateItem(idx, 'name', e.target.value)} className="w-full px-2 py-1 bg-slate-50 border border-slate-100 rounded text-[10px] font-bold outline-none" placeholder="Деталь" />
+                      <input 
+                        value={item.name} 
+                        maxLength={90}
+                        onChange={e => updateItem(idx, 'name', e.target.value)} 
+                        className="w-full px-2 py-1 bg-slate-50 border border-slate-100 rounded text-[10px] font-bold outline-none focus:border-indigo-300 transition-colors" 
+                        placeholder="Название детали (макс. 90 симв.)" 
+                      />
                     </div>
                     <div className="relative">
                       <select value={item.category} onChange={e => updateItem(idx, 'category', e.target.value as PartCategory)} className="w-full appearance-none px-2 py-1 bg-slate-50 border border-slate-100 rounded text-[9px] font-black uppercase pr-8 outline-none">
@@ -295,7 +463,7 @@ export const ClientInterface: React.FC = () => {
                       <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400" />
                     </div>
                     <div className="flex items-center gap-1">
-                      <input type="number" value={item.quantity} onChange={e => updateItem(idx, 'quantity', Math.max(1, parseInt(e.target.value) || 1))} className="w-full px-1 py-1 bg-slate-50 border border-slate-100 rounded text-[10px] text-center font-black" />
+                      <input type="number" value={item.quantity} onChange={e => updateItem(idx, 'quantity', parseInt(e.target.value))} className="w-full px-1 py-1 bg-slate-50 border border-slate-100 rounded text-[10px] text-center font-black" />
                     </div>
                   </div>
                 </div>
