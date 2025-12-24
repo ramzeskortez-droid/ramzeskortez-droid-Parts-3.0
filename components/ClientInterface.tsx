@@ -4,7 +4,7 @@ import { SheetService } from '../services/sheetService';
 import { Order, OrderStatus, PartCategory } from '../types';
 import { Pagination } from './Pagination';
 import { 
-  Send, Plus, Trash2, Zap, CheckCircle2, Car, MoreHorizontal, Calculator, Search, Loader2, ChevronDown, ShoppingCart, Archive, UserCircle2, LogOut, ShieldCheck, Phone, X, Calendar, Clock, Hash, Package, Ban, RefreshCw, AlertCircle
+  Send, Plus, Trash2, Zap, CheckCircle2, Car, MoreHorizontal, Calculator, Search, Loader2, ChevronDown, ShoppingCart, Archive, UserCircle2, LogOut, ShieldCheck, Phone, X, Calendar, Clock, Hash, Package, Ban, RefreshCw, AlertCircle, ArrowUp, ArrowDown, ArrowUpDown
 } from 'lucide-react';
 
 // --- DATA CONSTANTS ---
@@ -20,6 +20,41 @@ const ALL_BRANDS_LIST = [
 ];
 
 const FULL_BRAND_SET = new Set([...POPULAR_BRANDS_LIST, ...ALL_BRANDS_LIST]);
+
+// Demo Data
+const DEMO_ITEMS_POOL = [
+    { name: "Фильтр масляный", category: "Оригинал" },
+    { name: "Колодки передние", category: "Аналог" },
+    { name: "Бампер передний", category: "Б/У" },
+    { name: "Свеча зажигания", category: "Оригинал" },
+    { name: "Рычаг подвески", category: "Аналог" },
+    { name: "Фара левая LED", category: "Б/У" },
+    { name: "Масло 5W30 5л", category: "Оригинал" },
+    { name: "Диск тормозной", category: "Аналог" },
+    { name: "Радиатор охлаждения", category: "Аналог" },
+    { name: "Стойка стабилизатора", category: "Оригинал" }
+];
+
+// Helper to generate full VIN
+const generateVin = (prefix: string) => {
+    const chars = "ABCDEFGHJKLMNPRSTUVWXYZ0123456789";
+    let result = prefix;
+    while (result.length < 17) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+};
+
+const DEMO_CARS = [
+    { brand: "BMW", model: "X5 G05", prefix: "WBA" },
+    { brand: "Toyota", model: "Camry V70", prefix: "JT1" },
+    { brand: "Kia", model: "Rio 4", prefix: "Z94" },
+    { brand: "Mercedes-Benz", model: "E-Class W213", prefix: "WDB" },
+    { brand: "Volkswagen", model: "Tiguan II", prefix: "XW8" },
+    { brand: "Hyundai", model: "Solaris", prefix: "X7M" },
+    { brand: "Lexus", model: "RX 350", prefix: "JTJ" },
+    { brand: "Skoda", model: "Octavia A7", prefix: "TMB" }
+];
 
 export const ClientInterface: React.FC = () => {
   const [clientAuth, setClientAuth] = useState(() => {
@@ -55,6 +90,9 @@ export const ClientInterface: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
 
+  // Sorting State
+  const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
+
   const fetchOrders = async () => {
     setIsSyncing(true);
     try {
@@ -82,7 +120,7 @@ export const ClientInterface: React.FC = () => {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [activeTab, searchQuery]);
+  }, [activeTab, searchQuery, sortConfig]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -147,8 +185,6 @@ export const ClientInterface: React.FC = () => {
     setClientAuth(null);
     setOrders([]); 
     setShowAuthModal(true);
-    
-    // Reset Form Data
     setVin('');
     setCar({ brand: '', model: '', bodyType: '', year: '', engine: '', transmission: '' });
     setItems([{ name: '', quantity: 1, color: '', category: 'Оригинал' as PartCategory, refImage: '' }]);
@@ -161,11 +197,14 @@ export const ClientInterface: React.FC = () => {
     setItems(newItems);
   };
 
+  const isValidBrand = useMemo(() => {
+      return !!car.brand && FULL_BRAND_SET.has(car.brand);
+  }, [car.brand]);
+
   const isFormValid = useMemo(() => {
-      const hasBrand = !!car.brand && FULL_BRAND_SET.has(car.brand);
       const hasItems = items.length > 0 && items.every(i => i.name.trim().length > 0);
-      return hasBrand && hasItems;
-  }, [car.brand, items]);
+      return isValidBrand && hasItems;
+  }, [isValidBrand, items]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -239,7 +278,6 @@ export const ClientInterface: React.FC = () => {
     setRefuseModalOrder(null);
     
     try {
-      // source: 'CLIENT' signals to backend to use Client Refusal Template
       await SheetService.refuseOrder(orderId, "Отмена клиентом", 'CLIENT'); 
       setVanishingIds(prev => new Set(prev).add(orderId));
       setSuccessToast({ message: `Заказ ${orderId} аннулирован`, id: Date.now().toString() });
@@ -259,14 +297,41 @@ export const ClientInterface: React.FC = () => {
   };
 
   const handleDemoForm = () => {
-    const demoVins = ['WBA520373786', 'WAUZZZ4K2L001'];
-    const randomIdx = Math.floor(Math.random() * demoVins.length);
-    setVin(demoVins[randomIdx]);
-    setCar({ brand: 'BMW', model: '5-Series G30', bodyType: 'Седан', year: '2022', engine: 'B48 2.0L', transmission: 'ZF8' });
-    setItems([
-      { name: 'Капот M-Style', quantity: 1, color: 'Черный', category: 'Оригинал', refImage: '' },
-      { name: 'Фара Laser Right', quantity: 1, color: '', category: 'Б/У', refImage: '' }
-    ]);
+    // Random Car
+    const randomCar = DEMO_CARS[Math.floor(Math.random() * DEMO_CARS.length)];
+    // GENERATE FULL VIN
+    const randomVin = generateVin(randomCar.prefix);
+    const randomYear = Math.floor(Math.random() * (2026 - 2000 + 1) + 2000).toString();
+    
+    // Random Items (1 to 4)
+    const itemCount = Math.floor(Math.random() * 4) + 1;
+    const shuffledItems = [...DEMO_ITEMS_POOL].sort(() => 0.5 - Math.random());
+    const selectedItems = shuffledItems.slice(0, itemCount).map(i => ({
+        ...i,
+        quantity: Math.floor(Math.random() * 2) + 1,
+        color: '',
+        refImage: ''
+    }));
+
+    setVin(randomVin);
+    setCar({ 
+        brand: randomCar.brand, 
+        model: randomCar.model, 
+        bodyType: 'Седан', 
+        year: randomYear, 
+        engine: '2.0L', 
+        transmission: 'Auto' 
+    });
+    setItems(selectedItems);
+  };
+
+  const handleSort = (key: string) => {
+      setSortConfig(current => {
+          if (current?.key === key) {
+              return { key, direction: current.direction === 'asc' ? 'desc' : 'asc' };
+          }
+          return { key, direction: 'asc' };
+      });
   };
 
   const counts = useMemo(() => {
@@ -275,20 +340,68 @@ export const ClientInterface: React.FC = () => {
     return { processed, archive };
   }, [orders]);
 
-  const filteredOrders = useMemo(() => orders.filter(o => {
-    let inTab = false;
-    if (activeTab === 'archive') inTab = o.status === OrderStatus.CLOSED || o.readyToBuy || o.isRefused;
-    else inTab = o.status === OrderStatus.OPEN && !o.readyToBuy && !o.isRefused;
-    if (!inTab) return false;
+  const filteredOrders = useMemo(() => {
+    let result = orders.filter(o => {
+        let inTab = false;
+        if (activeTab === 'archive') inTab = o.status === OrderStatus.CLOSED || o.readyToBuy || o.isRefused;
+        else inTab = o.status === OrderStatus.OPEN && !o.readyToBuy && !o.isRefused;
+        if (!inTab) return false;
 
-    if (!searchQuery) return true;
-    const q = searchQuery.toLowerCase();
-    if (o.id.toLowerCase().includes(q)) return true;
-    if (o.vin.toLowerCase().includes(q)) return true;
-    if (o.car?.model?.toLowerCase().includes(q)) return true;
-    if (o.items.some(i => i.name.toLowerCase().includes(q))) return true;
-    return false;
-  }), [orders, activeTab, searchQuery]);
+        if (!searchQuery) return true;
+        const q = searchQuery.toLowerCase();
+        if (o.id.toLowerCase().includes(q)) return true;
+        if (o.vin.toLowerCase().includes(q)) return true;
+        if (o.car?.model?.toLowerCase().includes(q)) return true;
+        if (o.items.some(i => i.name.toLowerCase().includes(q))) return true;
+        return false;
+    });
+
+    if (sortConfig) {
+        result = [...result].sort((a, b) => {
+            let aVal: any = '';
+            let bVal: any = '';
+
+            switch (sortConfig.key) {
+                case 'id':
+                    aVal = a.id; bVal = b.id;
+                    break;
+                case 'model':
+                    aVal = a.car?.model || ''; bVal = b.car?.model || '';
+                    break;
+                case 'items':
+                    aVal = a.items.length; bVal = b.items.length;
+                    break;
+                case 'date':
+                    // Date parsing
+                    const parseD = (d: string) => {
+                        const [day, month, year] = d.split(/[\.\,]/);
+                        return new Date(Number(year), Number(month) - 1, Number(day)).getTime();
+                    };
+                    aVal = parseD(a.createdAt); bVal = parseD(b.createdAt);
+                    break;
+                case 'status':
+                    // Logic: Ready -> Processed -> New
+                    const getStatusWeight = (o: Order) => {
+                        if (o.readyToBuy) return 3;
+                        const hasWinner = o.offers?.some(off => off.items.some(i => i.rank === 'ЛИДЕР'));
+                        if (hasWinner) return 2;
+                        if (o.isRefused) return 0;
+                        return 1;
+                    };
+                    aVal = getStatusWeight(a); bVal = getStatusWeight(b);
+                    break;
+                default:
+                    return 0;
+            }
+
+            if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
+            if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
+            return 0;
+        });
+    }
+
+    return result;
+  }, [orders, activeTab, searchQuery, sortConfig]);
 
   const paginatedOrders = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
@@ -309,9 +422,11 @@ export const ClientInterface: React.FC = () => {
       return ALL_BRANDS_LIST.filter(b => b.toLowerCase().includes(q));
   }, [car.brand]);
 
-  const isValidBrand = useMemo(() => {
-      return !car.brand || FULL_BRAND_SET.has(car.brand);
-  }, [car.brand]);
+  // Helper for Sort Icons
+  const SortIcon = ({ column }: { column: string }) => {
+      if (sortConfig?.key !== column) return <ArrowUpDown size={10} className="text-slate-300 ml-1 opacity-50 group-hover:opacity-100 transition-opacity" />;
+      return sortConfig.direction === 'asc' ? <ArrowUp size={10} className="text-indigo-600 ml-1" /> : <ArrowDown size={10} className="text-indigo-600 ml-1" />;
+  };
 
   return (
     <div className="max-w-4xl mx-auto p-4 space-y-4 relative">
@@ -378,20 +493,22 @@ export const ClientInterface: React.FC = () => {
         </div>
         <form onSubmit={handleSubmit} className="p-4 space-y-6">
           <div className="bg-slate-50/50 p-4 rounded-xl border border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1"><label className="text-[9px] font-bold text-slate-400 uppercase ml-1">VIN / Шасси</label><input value={vin} onChange={e => setVin(e.target.value.toUpperCase())} className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md font-mono text-[10px] outline-none" placeholder="WBA..." /></div>
+              <div className="space-y-1"><label className="text-[9px] font-bold text-slate-400 uppercase ml-1">VIN / Шасси</label><input value={vin} onChange={e => setVin(e.target.value.toUpperCase())} className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-md font-mono text-[10px] outline-none focus:border-indigo-500 transition-colors" placeholder="WBA..." /></div>
               <div className="space-y-1"><label className="text-[9px] font-bold text-slate-400 uppercase ml-1">Имя Клиента</label><input value={clientAuth?.name || ''} readOnly className="w-full px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-md text-[10px] font-bold uppercase text-slate-400 outline-none cursor-not-allowed" /></div>
               <div className="md:col-span-2 grid grid-cols-2 md:grid-cols-3 gap-3">
                   <div className="space-y-1 relative">
                       <label className="text-[8px] font-bold text-slate-400 uppercase ml-1">Марка (Бренд)</label>
                       <div className="relative">
-                          <input ref={brandInputRef} value={car.brand} onChange={(e) => { setCar({...car, brand: e.target.value}); setIsBrandOpen(true); }} onFocus={() => setIsBrandOpen(true)} className={`w-full px-3 py-1.5 bg-white border rounded-md text-[10px] font-bold uppercase outline-none focus:border-indigo-500 ${!isValidBrand ? 'border-red-300 bg-red-50 text-red-600' : 'border-slate-200'}`} placeholder="Введите марку..." />
+                          {/* Brand input with stronger validation style: Red if empty */}
+                          <input ref={brandInputRef} value={car.brand} onChange={(e) => { setCar({...car, brand: e.target.value}); setIsBrandOpen(true); }} onFocus={() => setIsBrandOpen(true)} className={`w-full px-3 py-1.5 bg-white border rounded-md text-[10px] font-bold uppercase outline-none focus:border-indigo-500 transition-colors ${!car.brand ? 'border-red-400 bg-red-50/30 ring-1 ring-red-100' : 'border-slate-300'}`} placeholder="Введите марку..." />
                           <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400" />
                       </div>
                       {isBrandOpen && (<div ref={brandListRef} className="absolute z-50 left-0 right-0 top-full mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-xl divide-y divide-slate-50 animate-in fade-in zoom-in-95 duration-100">{filteredBrands.length > 0 ? (filteredBrands.map((brand, idx) => (<div key={brand} onClick={() => { setCar({...car, brand}); setIsBrandOpen(false); }} className="px-3 py-2 text-[10px] font-bold text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 cursor-pointer uppercase">{brand}</div>))) : (<div className="px-3 py-2 text-[10px] text-slate-400 italic">Ничего не найдено</div>)}</div>)}
+                      {/* Only show explicit error text if dropdown isn't open and brand is NOT valid but present (invalid input) */}
                       {!isValidBrand && car.brand.length > 0 && !isBrandOpen && (<div className="text-[8px] font-bold text-red-500 mt-1 absolute -bottom-4 left-0">Выберите марку из списка</div>)}
                   </div>
-                  <div className="space-y-1"><label className="text-[8px] font-bold text-slate-400 uppercase ml-1">Модель</label><input value={car.model} onChange={e => setCar({...car, model: e.target.value})} className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-[10px] font-bold outline-none uppercase" placeholder="Напишите модель (X5, Camry...)" /></div>
-                  <div className="space-y-1"><label className="text-[8px] font-bold text-slate-400 uppercase ml-1">Год выпуска</label><input value={car.year} onChange={e => setCar({...car, year: e.target.value})} className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-md text-[10px] font-bold text-center" placeholder="202X" /></div>
+                  <div className="space-y-1"><label className="text-[8px] font-bold text-slate-400 uppercase ml-1">Модель</label><input value={car.model} onChange={e => setCar({...car, model: e.target.value})} className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-md text-[10px] font-bold outline-none uppercase focus:border-indigo-500" placeholder="Напишите модель (X5, Camry...)" /></div>
+                  <div className="space-y-1"><label className="text-[8px] font-bold text-slate-400 uppercase ml-1">Год выпуска</label><input value={car.year} onChange={e => setCar({...car, year: e.target.value})} className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-md text-[10px] font-bold text-center focus:border-indigo-500" placeholder="202X" /></div>
               </div>
           </div>
           <div className="space-y-3">
@@ -426,14 +543,14 @@ export const ClientInterface: React.FC = () => {
 
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="p-4 border-b border-slate-50 relative group hidden md:block">
-            {/* UPDATED HEADER GRID: Added VIN column (130px) */}
-            <div className="grid grid-cols-[80px_1fr_130px_50px_80px_110px_20px] gap-3 text-[9px] font-black uppercase text-slate-400 tracking-wider">
-               <div>№ заказа</div>
-               <div>Модель</div>
+            {/* UPDATED HEADER GRID: Added Sort Headers */}
+            <div className="grid grid-cols-[80px_1fr_130px_50px_80px_110px_20px] gap-3 text-[9px] font-black uppercase text-slate-400 tracking-wider select-none">
+               <div className="cursor-pointer flex items-center group" onClick={() => handleSort('id')}>№ заказа <SortIcon column="id"/></div>
+               <div className="cursor-pointer flex items-center group" onClick={() => handleSort('model')}>Модель <SortIcon column="model"/></div>
                <div>VIN</div>
-               <div>Поз.</div>
-               <div>Дата</div>
-               <div className="text-right">Статус</div>
+               <div className="cursor-pointer flex items-center group" onClick={() => handleSort('items')}>Поз. <SortIcon column="items"/></div>
+               <div className="cursor-pointer flex items-center group" onClick={() => handleSort('date')}>Дата <SortIcon column="date"/></div>
+               <div className="text-right cursor-pointer flex items-center justify-end group" onClick={() => handleSort('status')}>Статус <SortIcon column="status"/></div>
                <div></div>
             </div>
           </div>
@@ -463,11 +580,21 @@ export const ClientInterface: React.FC = () => {
                  <div className="p-3 grid grid-cols-[80px_1fr_130px_50px_80px_110px_20px] items-center gap-3 cursor-pointer min-h-[56px]" onClick={() => !isVanishing && !isOptimistic && setExpandedId(isExpanded ? null : order.id)}>
                     <div className="flex items-center text-left">{isOptimistic ? (<div className="flex items-center gap-1.5 text-indigo-500"><Loader2 size={12} className="animate-spin"/><span className="text-[9px] font-bold uppercase tracking-wider">Создание</span></div>) : (<span className="font-mono font-bold text-[10px] text-slate-900 truncate block">{order.id}</span>)}</div>
                     <div className="flex flex-col justify-center min-w-0 text-left"><span className="font-bold text-[10px] text-slate-700 uppercase leading-none truncate block">{displayModel}</span></div>
-                    {/* NEW VIN COLUMN */}
                     <div className="flex items-center text-left"><span className="font-mono font-bold text-[10px] text-slate-500 uppercase leading-none tracking-tight truncate block">{order.vin}</span></div>
                     <div className="flex items-center gap-1 text-left"><Package size={12} className="text-slate-300"/><span className="text-[9px] font-bold text-slate-500">{itemsCount}</span></div>
                     <div className="flex items-center gap-1 text-left"><Calendar size={12} className="text-slate-300"/><span className="text-[9px] font-bold text-slate-500">{orderDate}</span></div>
-                    <div className="flex justify-end text-right">{order.isRefused ? (<span className="px-2 py-1 rounded-md font-black text-[8px] uppercase bg-red-100 text-red-600 whitespace-nowrap shadow-sm flex items-center gap-1"><Ban size={10}/> АННУЛИРОВАН</span>) : order.readyToBuy ? (<span className="px-2 py-1 rounded-md font-black text-[8px] uppercase bg-emerald-600 text-white whitespace-nowrap shadow-sm">КУПЛЕНО</span>) : (<span className={`px-2 py-1 rounded-md font-bold text-[8px] uppercase whitespace-nowrap shadow-sm border ${hasWinning ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>{hasWinning ? 'ГОТОВО' : 'В ОБРАБОТКЕ'}</span>)}</div>
+                    <div className="flex justify-end text-right">
+                        {order.isRefused ? (
+                            <span className="px-2 py-1 rounded-md font-black text-[8px] uppercase bg-red-100 text-red-600 whitespace-nowrap shadow-sm flex items-center gap-1"><Ban size={10}/> АННУЛИРОВАН</span>
+                        ) : order.readyToBuy ? (
+                            <span className="px-2 py-1 rounded-md font-black text-[8px] uppercase bg-emerald-600 text-white whitespace-nowrap shadow-sm">КУПЛЕНО</span>
+                        ) : (
+                            // CHANGED: Status "В ОБРАБОТКЕ" is now YELLOW (amber) with amber border
+                            <span className={`px-2 py-1 rounded-md font-bold text-[8px] uppercase whitespace-nowrap shadow-sm border ${hasWinning ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-amber-100 text-amber-800 border-amber-200'}`}>
+                                {hasWinning ? 'ГОТОВО' : 'В ОБРАБОТКЕ'}
+                            </span>
+                        )}
+                    </div>
                     <div className="flex justify-end">{isOptimistic ? null : <MoreHorizontal size={14} className="text-slate-300" />}</div>
                  </div>
 
@@ -501,7 +628,6 @@ export const ClientInterface: React.FC = () => {
                                   </div>
                               )}
                               
-                              {/* FOOTER FIX: Added flex-wrap and better alignment for mobile */}
                               <div className="bg-slate-900 text-white p-4 flex flex-wrap md:flex-nowrap justify-between items-center gap-4">
                                   <div className="flex flex-col md:flex-row items-start md:items-center gap-2 md:gap-4 w-full md:w-auto">
                                       {hasWinning && (

@@ -5,7 +5,7 @@ import { Order, OrderStatus, Currency, RowType } from '../types';
 import { Pagination } from './Pagination';
 import { 
   User, CheckCircle, Search, RefreshCw, Edit2, LogOut, ShieldCheck, AlertCircle,
-  BarChart3, Calendar, TrendingUp, Clock, Car, ChevronDown, ChevronRight, Loader2, CheckCircle2, UserCircle2, AlertTriangle, XCircle, FileText, Ban, Copy
+  BarChart3, Calendar, TrendingUp, Clock, Car, ChevronDown, ChevronRight, Loader2, CheckCircle2, UserCircle2, AlertTriangle, XCircle, FileText, Ban, Copy, ArrowUp, ArrowDown, ArrowUpDown
 } from 'lucide-react';
 
 export const SellerInterface: React.FC = () => {
@@ -35,6 +35,9 @@ export const SellerInterface: React.FC = () => {
 
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
+
+  // Sorting State
+  const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
 
   const fetchData = async (silent = false) => {
     if (!sellerAuth?.name) return;
@@ -150,7 +153,8 @@ export const SellerInterface: React.FC = () => {
 
   const getOfferStatus = (order: Order) => {
     const myOffer = getMyOffer(order);
-    if (!myOffer) return { label: 'Ожидание', color: 'bg-slate-100 text-slate-500', icon: <Clock size={10}/> };
+    // CHANGED: Status "Ожидание" -> "Сбор офферов" (Yellow)
+    if (!myOffer) return { label: 'Сбор офферов', color: 'bg-amber-100 text-amber-700 border-amber-200', icon: <Clock size={10}/> };
 
     const isRefusal = myOffer.items.every(item => (item.offeredQuantity || 0) === 0);
     if (isRefusal) {
@@ -214,9 +218,18 @@ export const SellerInterface: React.FC = () => {
     return { today, week, month, total, leader };
   }, [rawOrders]);
 
+  const handleSort = (key: string) => {
+      setSortConfig(current => {
+          if (current?.key === key) {
+              return { key, direction: current.direction === 'asc' ? 'desc' : 'asc' };
+          }
+          return { key, direction: 'asc' };
+      });
+  };
+
   const filteredOrders = useMemo(() => {
     if (!sellerAuth) return [];
-    return rawOrders.filter(o => {
+    let result = rawOrders.filter(o => {
       const isSentByMe = hasSentOfferByMe(o);
       const isRelevant = activeTab === 'new' 
         ? (o.status === OrderStatus.OPEN && !o.isProcessed && !isSentByMe && !o.isRefused)
@@ -234,7 +247,54 @@ export const SellerInterface: React.FC = () => {
       }
       return true;
     });
-  }, [rawOrders, appliedSearch, activeTab, sellerAuth, optimisticSentIds, activeBrandFilter]);
+
+    if (sortConfig) {
+        result = [...result].sort((a, b) => {
+            let aVal: any = '';
+            let bVal: any = '';
+
+            switch (sortConfig.key) {
+                case 'id':
+                    aVal = a.id; bVal = b.id;
+                    break;
+                case 'brand':
+                    // Extract Brand
+                    const getBrand = (order: Order) => (order.car?.AdminModel || order.car?.model || '').split(' ')[0];
+                    aVal = getBrand(a); bVal = getBrand(b);
+                    break;
+                case 'model':
+                    // Extract Model
+                    const getModel = (order: Order) => {
+                        const full = order.car?.AdminModel || order.car?.model || '';
+                        return full.split(' ').slice(1).join(' ');
+                    }
+                    aVal = getModel(a); bVal = getModel(b);
+                    break;
+                case 'year':
+                    aVal = a.car?.AdminYear || a.car?.year || '0'; 
+                    bVal = b.car?.AdminYear || b.car?.year || '0';
+                    break;
+                case 'date':
+                    aVal = parseRuDate(a.createdAt).getTime();
+                    bVal = parseRuDate(b.createdAt).getTime();
+                    break;
+                case 'status':
+                    // Just simple string compare of status label/type
+                    const getStatus = (o: Order) => getOfferStatus(o).label;
+                    aVal = getStatus(a); bVal = getStatus(b);
+                    break;
+                default:
+                    return 0;
+            }
+
+            if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
+            if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
+            return 0;
+        });
+    }
+
+    return result;
+  }, [rawOrders, appliedSearch, activeTab, sellerAuth, optimisticSentIds, activeBrandFilter, sortConfig]);
 
   const availableBrands = useMemo(() => {
       const brands = new Set<string>();
@@ -297,6 +357,12 @@ export const SellerInterface: React.FC = () => {
       navigator.clipboard.writeText(text);
       setSuccessToast({ message: "Скопировано", id: Date.now().toString() });
       setTimeout(() => setSuccessToast(null), 1000);
+  };
+
+  // Helper for Sort Icons
+  const SortIcon = ({ column }: { column: string }) => {
+      if (sortConfig?.key !== column) return <ArrowUpDown size={10} className="text-slate-300 ml-1 opacity-50 group-hover:opacity-100 transition-opacity" />;
+      return sortConfig.direction === 'asc' ? <ArrowUp size={10} className="text-indigo-600 ml-1" /> : <ArrowDown size={10} className="text-indigo-600 ml-1" />;
   };
 
   return (
@@ -388,17 +454,17 @@ export const SellerInterface: React.FC = () => {
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        {/* HEADER ROW - MATCHING ROW STRUCTURE */}
+        {/* HEADER ROW - MATCHING ROW STRUCTURE WITH SORTING */}
         <div className="hidden md:block border-b border-slate-50 border-l-4 border-transparent">
-            {/* UPDATED HEADER GRID: Added VIN column (130px) */}
-            <div className="p-3 grid grid-cols-[70px_100px_1fr_130px_50px_80px_140px_20px] gap-4 text-[9px] font-black uppercase text-slate-400 tracking-wider text-left">
-               <div>№ заказа</div>
-               <div>Марка</div>
-               <div>Модель</div>
+            {/* UPDATED HEADER GRID: Added Sort Headers */}
+            <div className="p-3 grid grid-cols-[70px_100px_1fr_130px_50px_80px_140px_20px] gap-4 text-[9px] font-black uppercase text-slate-400 tracking-wider text-left select-none">
+               <div className="cursor-pointer flex items-center group" onClick={() => handleSort('id')}>№ заказа <SortIcon column="id"/></div>
+               <div className="cursor-pointer flex items-center group" onClick={() => handleSort('brand')}>Марка <SortIcon column="brand"/></div>
+               <div className="cursor-pointer flex items-center group" onClick={() => handleSort('model')}>Модель <SortIcon column="model"/></div>
                <div>VIN</div>
-               <div>Год</div>
-               <div>Дата</div>
-               <div>Статус</div>
+               <div className="cursor-pointer flex items-center group" onClick={() => handleSort('year')}>Год <SortIcon column="year"/></div>
+               <div className="cursor-pointer flex items-center group" onClick={() => handleSort('date')}>Дата <SortIcon column="date"/></div>
+               <div className="cursor-pointer flex items-center group" onClick={() => handleSort('status')}>Статус <SortIcon column="status"/></div>
                <div></div>
             </div>
         </div>

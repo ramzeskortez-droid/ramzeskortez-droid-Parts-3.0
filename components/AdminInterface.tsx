@@ -1,11 +1,12 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { SheetService } from '../services/sheetService';
-import { Order, OrderStatus, Currency } from '../types';
+import { Order, OrderStatus, Currency, RankType, OrderItem } from '../types';
 import { Pagination } from './Pagination';
 import { 
   Search, RefreshCw, ChevronRight, FileText, 
-  History, X, User, Edit, CheckCircle2, Calendar, Ban, Save, Edit3, Loader2, AlertTriangle, AlertCircle
+  History, X, CheckCircle2, Ban, Loader2,
+  ArrowUp, ArrowDown, ArrowUpDown, Edit2, Check, AlertCircle
 } from 'lucide-react';
 
 interface ActionLog {
@@ -21,6 +22,10 @@ interface AdminModalState {
   missingItems?: string[];
 }
 
+// CONSTANT GRID LAYOUT TO ENSURE ALIGNMENT
+// 9 Columns: ID | Brand | Model | Year | VIN | Client | Status/Offers | Date | Chevron
+const GRID_LAYOUT_CLASS = "grid grid-cols-[80px_100px_1fr_60px_120px_110px_110px_90px_30px] gap-3 p-4 border-b border-slate-100 items-center";
+
 export const AdminInterface: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -28,30 +33,37 @@ export const AdminInterface: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [activeTab, setActiveTab] = useState<'open' | 'closed'>('open');
-  const [expandedTenders, setExpandedTenders] = useState<Record<string, boolean>>({});
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [logs, setLogs] = useState<ActionLog[]>([]);
   const [showLogs, setShowLogs] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState<string | null>(null);
   
-  // States for Edit Mode
-  const [editingOrderId, setEditingOrderId] = useState<string | null>(null); 
-  const [editForm, setEditForm] = useState<any>(null); 
+  // Edit Mode State
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{ [key: string]: string }>({}); 
   
-  const [approvedIds, setApprovedIds] = useState<Set<string>>(new Set());
-  const [vanishingIds, setVanishingIds] = useState<Set<string>>(new Set());
   const [successToast, setSuccessToast] = useState<{message: string, id: string} | null>(null);
 
-  // New Modal State replacing window.confirm/alert
   const [adminModal, setAdminModal] = useState<AdminModalState | null>(null);
   const [refusalReason, setRefusalReason] = useState("");
 
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
   
-  // Store admin price inputs. Key: "orderId-offerId-itemName"
-  const [adminInputs, setAdminInputs] = useState<Record<string, { price: number; currency: Currency }>>({});
+  const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
 
   const interactionLock = useRef<number>(0);
+
+  // --- HELPER FOR LOGS ---
+  const addLog = (text: string, type: 'info' | 'success' | 'error') => {
+      const log: ActionLog = {
+          id: Date.now().toString() + Math.random(),
+          time: new Date().toLocaleTimeString(),
+          text,
+          type
+      };
+      setLogs(prev => [log, ...prev].slice(0, 50));
+  };
 
   const fetchData = async (silent = false) => {
     if (silent && Date.now() - interactionLock.current < 10000) return;
@@ -61,545 +73,571 @@ export const AdminInterface: React.FC = () => {
     try {
       const data = await SheetService.getOrders(true);
       setOrders(data);
+      setError(null);
     } catch(e: any) { 
       addLog("Ошибка загрузки данных", "error");
-      setError(e.message || "Ошибка сервера");
+      setError(e.toString());
     } finally {
-      if (!silent) setLoading(false);
+      setLoading(false);
       setIsSyncing(false);
     }
   };
 
-  const addLog = (text: string, type: 'info' | 'success' | 'error' = 'info') => {
-    const newLog: ActionLog = { id: Math.random().toString(36).substr(2, 9), time: new Date().toLocaleTimeString(), text, type };
-    setLogs(prev => [newLog, ...prev].slice(50));
-  };
-
-  useEffect(() => { 
-    fetchData(); 
-    const interval = setInterval(() => fetchData(true), 15000);
-    return () => clearInterval(interval);
+  useEffect(() => {
+      fetchData();
+      const interval = setInterval(() => fetchData(true), 30000);
+      return () => clearInterval(interval);
   }, []);
 
-  useEffect(() => { setCurrentPage(1); }, [activeTab, searchQuery]);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeTab, searchQuery, sortConfig]);
 
-  const handleUpdateRank = async (
-      vin: string, 
-      itemName: string, 
-      offerId: string, 
-      orderId: string, 
-      sellerName: string,
-      currentAdminPrice: number,
-      currentAdminCurrency: Currency,
-      isCurrentlyLeader: boolean
-  ) => {
-    const inputKey = `${orderId}-${offerId}-${itemName}`;
-    const inputState = adminInputs[inputKey];
-    
-    const finalPrice = inputState?.price ?? currentAdminPrice ?? 0;
-    const finalCurrency = inputState?.currency ?? currentAdminCurrency ?? 'RUB';
-
-    interactionLock.current = Date.now();
-    addLog(`Выбор: ${itemName} от ${sellerName} (${finalPrice} ${finalCurrency})`, "info");
-    const targetItemName = itemName.trim().toLowerCase();
-
-    // Optimistic Update
-    setOrders(prev => prev.map(o => {
-      if (o.id !== orderId) return o;
-      return {
-        ...o,
-        offers: o.offers?.map(off => ({
-          ...off,
-          items: off.items.map(it => {
-            if (it.name.trim().toLowerCase() === targetItemName) {
-              if (isCurrentlyLeader) {
-                  // If unselecting, reset to RESERVE
-                  return { ...it, rank: 'РЕЗЕРВ' };
-              } else {
-                  if (off.id === offerId) {
-                      return { ...it, rank: 'ЛИДЕР', adminPrice: finalPrice, adminCurrency: finalCurrency };
-                  } else {
-                      return { ...it, rank: 'РЕЗЕРВ' };
-                  }
-              }
-            }
-            return it;
-          })
-        }))
-      };
-    }));
-    
-    try {
-      // Pass 'RESET' action type if we are unselecting a leader
-      await SheetService.updateRank(vin, itemName, offerId, finalPrice, finalCurrency, isCurrentlyLeader ? 'RESET' : undefined);
-      addLog(`Подтверждено: ${itemName}`, "success");
-    } catch (e) {
-      addLog(`Ошибка обновления`, "error");
-      fetchData(true); 
-    }
-  };
-
-  // Logic extracted to be callable from both direct click and modal confirmation
-  const executeApproval = async (orderId: string) => {
-    setAdminModal(null);
-    interactionLock.current = Date.now();
-    setIsSubmitting(orderId);
-    setApprovedIds(prev => new Set(prev).add(orderId));
-    setExpandedTenders(prev => ({ ...prev, [orderId]: false })); 
-    setSuccessToast({ message: `КП по заказу ${orderId} сформировано`, id: Date.now().toString() });
-    setTimeout(() => setSuccessToast(null), 3000);
-
-    try {
-        await SheetService.formCP(orderId);
-        setEditingOrderId(null);
-        setApprovedIds(prev => { const n = new Set(prev); n.delete(orderId); return n; });
-        setVanishingIds(prev => new Set(prev).add(orderId));
-        
-        setTimeout(() => {
-            setOrders(prev => prev.map(o => o.id === orderId ? { ...o, isProcessed: true } : o));
-            setVanishingIds(prev => { const n = new Set(prev); n.delete(orderId); return n; });
-            setIsSubmitting(null);
-            fetchData(true);
-        }, 700);
-    } catch (err) {
-        console.error("Error approving CP:", err);
-        alert("Произошла ошибка при утверждении КП.");
-        setApprovedIds(prev => { const n = new Set(prev); n.delete(orderId); return n; });
-        setIsSubmitting(null);
-    }
-  };
-
-  const handleFormCP = async (e: React.MouseEvent, order: Order) => {
-    e.stopPropagation(); 
-    e.preventDefault();
-
-    const missingLeaders: string[] = [];
-    const safeItems = order.items || [];
-    const safeOffers = order.offers || [];
-
-    // Check if at least 1 offer exists globally for this order
-    const globalOffersCount = safeOffers.length;
-    // Check if at least 1 offer exists for ANY item
-    let hasAnyOffer = false;
-    safeOffers.forEach(off => {
-        if (off.items.some(i => (i.offeredQuantity || 0) > 0)) hasAnyOffer = true;
-    });
-
-    if (globalOffersCount === 0) {
-        // Button should be disabled ideally, but if clicked:
-        return; 
-    }
-
-    safeItems.forEach(item => {
-        const itemNameLower = (item.name || '').trim().toLowerCase();
-        const hasLeader = safeOffers.some(off => 
-            (off.items || []).some(offItem => {
-                const offNameLower = (offItem.name || '').trim().toLowerCase();
-                return offNameLower === itemNameLower && (offItem.rank === 'ЛИДЕР' || offItem.rank === 'LEADER');
-            })
-        );
-        if (!hasLeader) {
-            missingLeaders.push(item.AdminName || item.name || 'Без названия');
-        }
-    });
-
-    if (missingLeaders.length > 0) {
-        setAdminModal({
-            type: 'VALIDATION',
-            missingItems: missingLeaders,
-            orderId: order.id
-        });
-        return;
-    }
-
-    executeApproval(order.id);
-  };
-
-  const startEditing = (e: React.MouseEvent, order: Order) => {
-     e.stopPropagation();
-     setEditingOrderId(order.id);
-     setEditForm(JSON.parse(JSON.stringify(order))); 
-  };
-
-  const saveChanges = async (e: React.MouseEvent) => {
-     e.stopPropagation();
-     if (!editingOrderId || !editForm) return;
-     
-     const originalOrder = orders.find(o => o.id === editingOrderId);
-     if (!originalOrder) return;
-     
-     const newCar: any = { ...originalOrder.car }; 
-     newCar.AdminModel = editForm.car.model; 
-     newCar.AdminYear = editForm.car.year;
-     
-     const newItems = originalOrder.items.map((origItem, idx) => {
-         const editedItem = editForm.items[idx];
-         if (!editedItem) return origItem;
-         
-         const newItem = { ...origItem };
-         newItem.AdminName = editedItem.name;
-         newItem.AdminQuantity = editedItem.quantity;
-         newItem.car = newCar; 
-         
-         if (idx === 0 && originalOrder.clientPhone) {
-             (newItem as any).clientPhone = originalOrder.clientPhone;
-         }
-         return newItem;
-     });
-     
-     setIsSubmitting(editingOrderId);
-     
-     setOrders(prev => prev.map(o => {
-         if (o.id === editingOrderId) {
-             return { ...o, car: newCar, items: newItems };
-         }
-         return o;
-     }));
-
-     setSuccessToast({ message: "Изменения сохранены", id: Date.now().toString() });
-     setEditingOrderId(null);
-     setEditForm(null);
-
-     try {
-         await SheetService.updateOrderJson(editingOrderId, newItems);
-         setTimeout(() => fetchData(true), 1000); 
-     } catch (e) {
-         console.error(e);
-         alert("Ошибка сохранения на сервере, но локально данные обновлены.");
-     } finally {
-         setIsSubmitting(null);
-         setTimeout(() => setSuccessToast(null), 3000);
-     }
-  };
-
-  const cancelEditing = (e: React.MouseEvent) => {
-      e.stopPropagation();
-      setEditingOrderId(null);
-      setEditForm(null);
-  };
-
-  const handleAnnulOrder = (e: React.MouseEvent, orderId: string) => {
-      e.stopPropagation();
-      e.preventDefault(); 
-      setRefusalReason("");
-      setAdminModal({
-          type: 'ANNUL',
-          orderId: orderId
+  const handleSort = (key: string) => {
+      // Logic: Collapse expanded row to prevent jumping visual bugs
+      setExpandedId(null);
+      
+      setSortConfig(current => {
+          if (current?.key === key) {
+              return { key, direction: current.direction === 'asc' ? 'desc' : 'asc' };
+          }
+          return { key, direction: 'asc' };
       });
   };
 
-  const processAnnulment = async () => {
-      if (!adminModal?.orderId) return;
-      if (!refusalReason.trim()) {
-          alert("Пожалуйста, укажите причину аннулирования.");
+  // --- FILTERING & SORTING ---
+  const filteredOrders = useMemo(() => {
+      let result = orders.filter(o => {
+          const isClosed = o.status === OrderStatus.CLOSED || o.readyToBuy || o.isRefused;
+          if (activeTab === 'open' && isClosed) return false;
+          if (activeTab === 'closed' && !isClosed) return false;
+          
+          if (searchQuery) {
+              const q = searchQuery.toLowerCase();
+              return o.id.toLowerCase().includes(q) || 
+                     o.vin.toLowerCase().includes(q) || 
+                     o.clientName.toLowerCase().includes(q) ||
+                     o.items.some(i => i.name.toLowerCase().includes(q));
+          }
+          return true;
+      });
+
+      if (sortConfig) {
+        result.sort((a, b) => {
+            let aVal: any = '';
+            let bVal: any = '';
+            
+            if (sortConfig.key === 'id') { aVal = a.id; bVal = b.id; }
+            else if (sortConfig.key === 'date') { 
+                const parseD = (d: string) => {
+                    const [day, month, year] = d.split(/[\.\,]/);
+                    return new Date(Number(year), Number(month) - 1, Number(day)).getTime();
+                };
+                aVal = parseD(a.createdAt); bVal = parseD(b.createdAt); 
+            }
+            else if (sortConfig.key === 'year') {
+                aVal = a.car?.AdminYear || a.car?.year || ''; 
+                bVal = b.car?.AdminYear || b.car?.year || '';
+            }
+            else if (sortConfig.key === 'client') { aVal = a.clientName; bVal = b.clientName; }
+            else if (sortConfig.key === 'offers') {
+                aVal = (a.offers || []).length;
+                bVal = (b.offers || []).length;
+            }
+            else if (sortConfig.key === 'status') {
+                // Custom Status Weight for Archive
+                const getStatusWeight = (o: Order) => {
+                    if (o.readyToBuy) return 4; // КУПЛЕНО (Top priority in approved)
+                    if (o.isProcessed) return 3; // ГОТОВО
+                    if (o.isRefused) return 2; // ОТКАЗ
+                    return 1; // Просто закрыт/Открыт
+                };
+                aVal = getStatusWeight(a);
+                bVal = getStatusWeight(b);
+            }
+            
+            if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
+            if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
+            return 0;
+        });
+      }
+      return result;
+  }, [orders, activeTab, searchQuery, sortConfig]);
+  
+  const paginatedOrders = useMemo(() => {
+      const start = (currentPage - 1) * itemsPerPage;
+      return filteredOrders.slice(start, start + itemsPerPage);
+  }, [filteredOrders, currentPage, itemsPerPage]);
+
+  // --- ACTIONS ---
+
+  const handleUpdateRank = async (offerId: string, itemName: string, currentRank: RankType, vin: string, adminPrice?: number, adminCurrency?: Currency) => {
+      interactionLock.current = Date.now();
+      const newAction = currentRank === 'ЛИДЕР' || currentRank === 'LEADER' ? 'RESET' : undefined;
+      
+      // Optimistic update
+      setOrders(prev => prev.map(o => {
+          if (o.vin !== vin) return o;
+          return {
+              ...o,
+              offers: o.offers?.map(off => ({
+                  ...off,
+                  items: off.items.map(i => {
+                      if (i.name === itemName) {
+                          if (off.id === offerId) {
+                              return { ...i, rank: newAction === 'RESET' ? 'РЕЗЕРВ' : 'ЛИДЕР' as RankType, adminPrice, adminCurrency };
+                          } else {
+                              // If setting leader, reset others
+                              if (!newAction) return { ...i, rank: 'РЕЗЕРВ' as RankType };
+                          }
+                      }
+                      return i;
+                  })
+              }))
+          };
+      }));
+
+      try {
+          await SheetService.updateRank(vin, itemName, offerId, adminPrice, adminCurrency, newAction);
+          addLog(`Обновлен ранг для ${itemName}`, 'success');
+      } catch (e) {
+          addLog("Ошибка обновления ранга", "error");
+          fetchData(true); // Revert on error
+      }
+  };
+
+  const handleFormCP = async (orderId: string) => {
+      const order = orders.find(o => o.id === orderId);
+      if (!order) return;
+
+      // VALIDATION: Check if every item has a Leader
+      const itemNames = order.items.map(i => (i.AdminName || i.name).trim().toLowerCase());
+      const coveredItems = new Set<string>();
+      
+      order.offers?.forEach(off => {
+          off.items.forEach(i => {
+              if (i.rank === 'ЛИДЕР' || i.rank === 'LEADER') {
+                  coveredItems.add(i.name.trim().toLowerCase());
+              }
+          });
+      });
+
+      const missing = order.items.filter(i => !coveredItems.has((i.AdminName || i.name).trim().toLowerCase()));
+
+      if (missing.length > 0) {
+          setAdminModal({
+              type: 'VALIDATION',
+              orderId: orderId,
+              missingItems: missing.map(i => i.AdminName || i.name)
+          });
           return;
       }
-      
-      const orderId = adminModal.orderId;
-      setAdminModal(null); 
 
+      executeApproval(orderId);
+  };
+
+  const executeApproval = async (orderId: string) => {
+      setAdminModal(null);
       setIsSubmitting(orderId);
-      setVanishingIds(prev => new Set(prev).add(orderId));
-      
       try {
-          // Explicitly pass 'ADMIN' as source
-          await SheetService.refuseOrder(orderId, refusalReason, 'ADMIN');
-          setTimeout(() => {
-              setOrders(prev => prev.map(o => o.id === orderId ? { ...o, isRefused: true, refusalReason: refusalReason } : o));
-              setVanishingIds(prev => { const n = new Set(prev); n.delete(orderId); return n; });
-              setIsSubmitting(null);
-              fetchData(true);
-          }, 700);
+          await SheetService.formCP(orderId);
+          addLog(`КП сформировано для ${orderId}`, 'success');
+          
+          // Optimistic
+          setOrders(prev => prev.map(o => o.id === orderId ? { ...o, isProcessed: true, status: OrderStatus.CLOSED } : o));
+          setSuccessToast({ message: "КП Утверждено!", id: Date.now().toString() });
+          setTimeout(() => setSuccessToast(null), 3000);
+          
       } catch (e) {
-          console.error(e);
-          alert("Ошибка аннулирования");
-          setVanishingIds(prev => { const n = new Set(prev); n.delete(orderId); return n; });
+          addLog("Ошибка формирования КП", "error");
+      } finally {
           setIsSubmitting(null);
       }
   };
 
-  const filteredOrders = useMemo(() => orders.filter(o => {
-    const matchSearch = o.vin.toLowerCase().includes(searchQuery.toLowerCase()) || o.id.toLowerCase().includes(searchQuery.toLowerCase());
-    const isProcessed = o.isProcessed === true || o.isProcessed === 'Y';
-    
-    if (activeTab === 'open') return matchSearch && o.status === OrderStatus.OPEN && !isProcessed && !o.isRefused; 
-    return matchSearch && (o.status === OrderStatus.CLOSED || isProcessed || o.isRefused);
-  }), [orders, searchQuery, activeTab]);
+  const handleRefuse = async () => {
+      if (!adminModal?.orderId) return;
+      setIsSubmitting(adminModal.orderId);
+      try {
+          await SheetService.refuseOrder(adminModal.orderId, refusalReason, 'ADMIN');
+          addLog(`Заказ ${adminModal.orderId} аннулирован`, 'success');
+          setAdminModal(null);
+          setRefusalReason("");
+          
+          setOrders(prev => prev.map(o => o.id === adminModal.orderId ? { ...o, isRefused: true, status: OrderStatus.CLOSED } : o));
+          
+      } catch (e) {
+          addLog("Ошибка отказа", "error");
+      } finally {
+          setIsSubmitting(null);
+      }
+  };
 
-  const paginatedOrders = useMemo(() => {
-    const start = (currentPage - 1) * itemsPerPage;
-    return filteredOrders.slice(start, start + itemsPerPage);
-  }, [filteredOrders, currentPage, itemsPerPage]);
+  const startEditing = (order: Order) => {
+      setEditingOrderId(order.id);
+      const form: any = {};
+      
+      // Car fields
+      form[`car_model`] = order.car?.AdminModel || order.car?.model || '';
+      form[`car_year`] = order.car?.AdminYear || order.car?.year || '';
+      form[`car_body`] = order.car?.AdminBodyType || order.car?.bodyType || '';
+      
+      // Items fields
+      order.items.forEach((item, idx) => {
+          form[`item_${idx}_name`] = item.AdminName || item.name;
+          form[`item_${idx}_qty`] = item.AdminQuantity || item.quantity;
+      });
+      
+      setEditForm(form);
+  };
+
+  const saveEditing = async (order: Order) => {
+      setIsSubmitting(order.id);
+      const newItems = order.items.map((item, idx) => ({
+          ...item,
+          AdminName: editForm[`item_${idx}_name`],
+          AdminQuantity: Number(editForm[`item_${idx}_qty`]),
+          car: {
+              ...order.car,
+              AdminModel: editForm[`car_model`],
+              AdminYear: editForm[`car_year`],
+              AdminBodyType: editForm[`car_body`]
+          }
+      }));
+
+      // Optimistic Update
+      setOrders(prev => prev.map(o => {
+          if (o.id === order.id) {
+              return {
+                  ...o,
+                  car: { ...o.car, AdminModel: editForm[`car_model`], AdminYear: editForm[`car_year`], AdminBodyType: editForm[`car_body`] } as any,
+                  items: newItems
+              };
+          }
+          return o;
+      }));
+
+      try {
+          await SheetService.updateOrderJson(order.id, newItems);
+          addLog(`Заказ ${order.id} обновлен`, 'success');
+          setEditingOrderId(null);
+      } catch (e) {
+          addLog("Ошибка сохранения", "error");
+          fetchData(true);
+      } finally {
+          setIsSubmitting(null);
+      }
+  };
+
+  // Helper for Sort Icons
+  const SortIcon = ({ column }: { column: string }) => {
+      if (sortConfig?.key !== column) return <ArrowUpDown size={10} className="text-slate-300 ml-1 opacity-50 group-hover:opacity-100 transition-opacity" />;
+      return sortConfig.direction === 'asc' ? <ArrowUp size={10} className="text-indigo-600 ml-1" /> : <ArrowDown size={10} className="text-indigo-600 ml-1" />;
+  };
 
   return (
-    <div className="max-w-6xl mx-auto p-4 space-y-4 relative pb-20">
-      {successToast && (
-          <div className="fixed top-6 right-6 z-[250] animate-in slide-in-from-top-4 fade-in duration-300">
-              <div className="bg-slate-900 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 border border-slate-700">
-                  <CheckCircle2 className="text-emerald-400" size={20} />
-                  <div><p className="text-[10px] font-black uppercase text-emerald-400">Успешно</p><p className="text-xs font-bold">{successToast.message}</p></div>
+      <div className="max-w-6xl mx-auto p-4 space-y-4">
+          {successToast && (
+             <div className="fixed top-6 right-6 z-50 bg-slate-800 text-white px-4 py-2 rounded shadow-lg flex items-center gap-2 animate-in slide-in-from-top-4 fade-in duration-300">
+                 <CheckCircle2 className="text-emerald-400" size={16}/> {successToast.message}
+             </div>
+          )}
+          
+          <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+              <div className="flex items-center gap-4">
+                  <h1 className="text-lg font-black uppercase text-slate-800">Панель Администратора</h1>
+                  <button onClick={() => setShowLogs(!showLogs)} className={`p-2 rounded-lg ${showLogs ? 'bg-slate-200' : 'bg-slate-50'} hover:bg-slate-200 transition-colors`}>
+                      <History size={18} className="text-slate-600"/>
+                  </button>
               </div>
           </div>
-      )}
 
-      {/* CUSTOM ADMIN MODAL */}
-      {adminModal && (
-          <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200" onClick={() => setAdminModal(null)}>
-              <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
-                  <div className="flex flex-col items-center gap-4 text-center">
-                      <div className={`w-12 h-12 rounded-full flex items-center justify-center ${adminModal.type === 'ANNUL' ? 'bg-red-50 text-red-500' : 'bg-amber-50 text-amber-500'}`}>
-                          {adminModal.type === 'ANNUL' ? <AlertCircle size={24}/> : <AlertTriangle size={24}/>}
+          {showLogs && (
+              <div className="bg-slate-900 text-slate-300 p-4 rounded-xl max-h-40 overflow-y-auto text-xs font-mono">
+                  {logs.map(log => (
+                      <div key={log.id} className={`mb-1 ${log.type === 'error' ? 'text-red-400' : log.type === 'success' ? 'text-emerald-400' : ''}`}>
+                          [{log.time}] {log.text}
                       </div>
-                      
-                      {adminModal.type === 'ANNUL' && (
-                          <>
-                            <div>
-                                <h3 className="text-lg font-black uppercase text-slate-900">Аннулировать заказ?</h3>
-                                <p className="text-xs text-slate-500 font-bold mt-1">Это действие необратимо. Заказ {adminModal.orderId} будет перемещен в архив.</p>
-                            </div>
-                            <textarea 
-                                autoFocus
-                                value={refusalReason}
-                                onChange={(e) => setRefusalReason(e.target.value)}
-                                placeholder="Укажите причину аннулирования..."
-                                className="w-full h-20 p-3 bg-slate-50 border border-slate-200 rounded-xl text-[10px] font-bold outline-none resize-none focus:border-red-300"
-                            />
-                            <div className="grid grid-cols-2 gap-3 w-full mt-2">
-                                <button onClick={() => setAdminModal(null)} className="py-3 rounded-xl bg-slate-100 text-slate-600 font-bold text-xs uppercase hover:bg-slate-200 transition-colors">Нет, назад</button>
-                                <button onClick={processAnnulment} disabled={!refusalReason.trim()} className="py-3 rounded-xl bg-red-600 text-white font-black text-xs uppercase hover:bg-red-700 transition-colors shadow-lg shadow-red-200 disabled:opacity-50">Аннулировать</button>
-                            </div>
-                          </>
-                      )}
-
-                      {adminModal.type === 'VALIDATION' && (
-                          <>
-                             <div>
-                                <h3 className="text-lg font-black uppercase text-slate-900">Вы уверены, что хотите утвердить КП?</h3>
-                                <p className="text-xs text-slate-500 font-bold mt-2">Не выбран поставщик (ЛИДЕР) для позиций:</p>
-                                <div className="mt-3 bg-red-50 rounded-xl p-3 text-left border border-red-100">
-                                    <ul className="list-disc pl-4 space-y-1">
-                                        {adminModal.missingItems?.map((item, idx) => (
-                                            <li key={idx} className="text-[10px] font-black uppercase text-red-700">{item}</li>
-                                        ))}
-                                    </ul>
-                                </div>
-                                <p className="text-[10px] text-slate-400 font-bold mt-3">Пожалуйста, отметьте галочкой предложения поставщиков для каждой позиции или продолжите без них.</p>
-                            </div>
-                            <div className="grid grid-cols-2 gap-3 w-full mt-2">
-                                <button onClick={() => setAdminModal(null)} className="py-3 rounded-xl bg-slate-100 text-slate-600 font-bold text-xs uppercase hover:bg-slate-200 transition-colors">Отмена</button>
-                                <button onClick={() => adminModal.orderId && executeApproval(adminModal.orderId)} className="py-3 rounded-xl bg-slate-900 text-white font-black text-xs uppercase hover:bg-slate-800 transition-colors">Продолжить</button>
-                            </div>
-                          </>
-                      )}
-                  </div>
+                  ))}
+                  {logs.length === 0 && <div className="text-slate-600 italic">Логов пока нет...</div>}
               </div>
+          )}
+
+          {/* LARGE SEARCH BAR LIKE SELLER */}
+          <div className="relative group flex items-center">
+              <Search className="absolute left-6 text-slate-400" size={20}/>
+              <input 
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Поиск по VIN или ID..."
+                  className="w-full pl-14 pr-4 py-4 bg-white border border-slate-200 rounded-2xl text-sm font-bold outline-none focus:border-indigo-300 shadow-sm transition-all"
+              />
           </div>
-      )}
 
-      <div className="flex flex-col sm:flex-row justify-between items-center gap-3">
-        <div className="flex items-center gap-2"><div className="w-8 h-8 bg-slate-950 rounded-lg flex items-center justify-center text-white"><FileText size={16}/></div><h1 className="text-sm font-black tracking-tight uppercase italic">Admin Panel</h1></div>
-        <div className="flex items-center gap-2">
-           <button onClick={() => setShowLogs(true)} className="p-1.5 bg-white border border-slate-200 rounded-lg relative"><History size={14}/></button>
-           <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200">
-              <button onClick={() => setActiveTab('open')} className={`px-4 py-1 rounded-md text-[10px] font-bold uppercase ${activeTab === 'open' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500'}`}>Новые ({orders.filter(o => o.status === 'ОТКРЫТ' && !o.isProcessed && !o.isRefused).length})</button>
-              <button onClick={() => setActiveTab('closed')} className={`px-4 py-1 rounded-md text-[10px] font-bold uppercase ${activeTab === 'closed' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500'}`}>Архив</button>
-           </div>
-           <button onClick={() => fetchData()} className="p-1.5 bg-slate-900 text-white rounded-lg"><RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''}/></button>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-4 border-b border-slate-50 relative group">
-            <Search className="absolute left-7 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-slate-900"/>
-            <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Поиск по VIN или ID..." className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-bold outline-none" />
-        </div>
-        
-        <div className="hidden md:grid grid-cols-[80px_100px_1.5fr_60px_130px_1fr_110px_90px_20px] gap-4 px-4 py-3 bg-slate-50/80 border-b border-slate-100 text-[9px] font-black uppercase text-slate-400 tracking-wider">
-           <div>ID</div>
-           <div>Марка</div>
-           <div>Модель</div>
-           <div>Год</div>
-           <div>VIN</div>
-           <div>Клиент</div>
-           <div>Офферы</div>
-           <div className="text-right">Дата</div>
-           <div></div>
-        </div>
-
-        {paginatedOrders.map(order => {
-          const isExpanded = expandedTenders[order.id];
-          const isEditing = editingOrderId === order.id;
-          const isApproved = approvedIds.has(order.id);
-          const isVanishing = vanishingIds.has(order.id);
-          const isVisualSuccess = isApproved || isVanishing;
-          const isProcessingAction = isSubmitting === order.id;
-
-          const effectiveModel = order.car?.AdminModel || order.car?.model || 'N/A';
-          const effectiveYear = order.car?.AdminYear || order.car?.year || '-';
-          
-          const fullModel = effectiveModel;
-          const brandPart = fullModel.split(' ')[0];
-          const modelPart = fullModel.split(' ').slice(1).join(' ') || '-';
-          
-          let containerStyle = isVanishing ? "opacity-0 max-h-0 py-0 overflow-hidden" : isApproved ? "bg-emerald-50 border-emerald-200" : order.isRefused ? "bg-red-50 border-red-200 opacity-60 grayscale-[0.5]" : isExpanded ? "border-l-indigo-600 ring-1 ring-indigo-600 shadow-xl bg-white relative z-10 rounded-xl my-3" : "hover:bg-slate-50 border-b border-slate-100 last:border-0";
-
-          const offersCount = order.offers?.length || 0;
-          const hasOffers = offersCount > 0;
-          const currentData = isEditing ? editForm : order;
-          const hasAnyValidOffer = (order.offers || []).some(o => (o.items || []).some(i => (i.offeredQuantity || 0) > 0));
-
-          return (
-            <div key={order.id} className={`transition-all duration-500 border-l-4 ${containerStyle}`}>
-              <div onClick={() => !isVisualSuccess && setExpandedTenders(p => ({ ...p, [order.id]: !isExpanded }))} className="p-3 cursor-pointer select-none grid grid-cols-1 md:grid-cols-[80px_100px_1.5fr_60px_130px_1fr_110px_90px_20px] gap-3 md:gap-4 items-center text-[10px]">
-                  <div className="font-mono font-bold truncate flex items-center gap-2"><span className="md:hidden text-slate-400">ID:</span>{order.id}</div>
-                  <div className="font-black uppercase truncate text-slate-800 flex items-center gap-2"><span className="md:hidden text-slate-400 w-12">Марка:</span>{brandPart}</div>
-                  <div className="font-black uppercase truncate text-slate-600 flex items-center gap-2"><span className="md:hidden text-slate-400 w-12">Модель:</span>{modelPart}</div>
-                  <div className="font-bold text-slate-500 flex items-center gap-2"><span className="md:hidden text-slate-400 w-12">Год:</span>{effectiveYear}</div>
-                  <div className="font-mono font-bold text-slate-500 truncate hidden md:block">{order.vin}</div>
-                  <div className="font-bold uppercase text-slate-600 truncate flex items-center gap-1.5"><User size={12} className="text-slate-300 shrink-0"/><span className="truncate">{order.clientName}</span></div>
-                  <div className="flex">
-                    {order.isRefused ? <span className="px-2.5 py-1 rounded-md font-black text-[9px] uppercase border shadow-sm bg-red-100 text-red-600 border-red-200 flex items-center gap-1"><Ban size={10}/> АННУЛИРОВАН</span> : 
-                    <span className={`px-2.5 py-1 rounded-md font-black text-[9px] uppercase border shadow-sm flex items-center gap-1.5 ${hasOffers ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-600 border-red-100'}`}>
-                        {order.isProcessed && <CheckCircle2 size={10} className="text-emerald-600"/>}
-                        {offersCount} офферов
-                    </span>}
-                  </div>
-                  <div className="font-bold text-slate-400 md:text-right flex items-center md:justify-end gap-1"><Calendar size={10} className="md:hidden inline"/>{order.createdAt.split(/[\n,]/)[0]}</div>
-                  <div className="flex justify-end items-center">{isVisualSuccess ? <CheckCircle2 size={16} className="text-emerald-600"/> : <ChevronRight size={14} className={`text-slate-300 transition-transform ${isExpanded ? 'rotate-90 text-indigo-600' : ''}`}/>}</div>
+          <div className="flex justify-between items-end border-b border-slate-200">
+              <div className="flex gap-4">
+                  <button onClick={() => setActiveTab('open')} className={`pb-2 text-sm font-bold uppercase border-b-2 transition-colors ${activeTab === 'open' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-400'}`}>Активные</button>
+                  <button onClick={() => setActiveTab('closed')} className={`pb-2 text-sm font-bold uppercase border-b-2 transition-colors ${activeTab === 'closed' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-400'}`}>Архив / Закрытые</button>
               </div>
+              <button onClick={() => fetchData()} className="mb-2 p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-all flex items-center gap-2">
+                  <RefreshCw size={14} className={isSyncing ? "animate-spin" : ""}/>
+              </button>
+          </div>
 
-              {isExpanded && !isVisualSuccess && (
-                <div className="p-5 bg-white border-t border-slate-100 space-y-4 cursor-default" onClick={e => e.stopPropagation()}>
-                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-4 text-[10px] shadow-sm">
-                      <div className="flex items-center justify-between mb-3">
-                         <div className="flex items-center gap-2">
-                             <FileText size={12} className="text-slate-400"/> 
-                             <span className="font-black uppercase text-slate-500">Детали заказа</span>
-                         </div>
-                      </div>
-                      <div className="grid grid-cols-2 md:grid-cols-7 gap-4">
-                         <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Клиент</span><span className="font-black text-indigo-700 uppercase">{order.clientName}</span></div>
-                         <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Телефон</span><span className="font-bold text-slate-700">{order.clientPhone || '-'}</span></div>
-                         <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">VIN</span><span className="font-mono font-black text-slate-800">{order.vin}</span></div>
-                         <div className={isEditing ? 'bg-white p-1 rounded ring-2 ring-blue-100' : ''}>
-                            <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Модель</span>
-                            {isEditing ? <input value={currentData.car?.model || ''} onChange={e => setEditForm({...editForm, car: {...editForm.car, model: e.target.value}})} className="w-full text-[10px] font-black uppercase outline-none border-b border-blue-300" /> : <span className="font-black text-slate-700 uppercase">{effectiveModel}</span>}
-                         </div>
-                         <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Марка</span><span className="font-black text-slate-700 uppercase">{brandPart}</span></div>
-                         <div className={isEditing ? 'bg-white p-1 rounded ring-2 ring-blue-100' : ''}>
-                            <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Год</span>
-                            {isEditing ? <input value={currentData.car?.year || ''} onChange={e => setEditForm({...editForm, car: {...editForm.car, year: e.target.value}})} className="w-full text-[10px] font-black uppercase outline-none border-b border-blue-300" /> : <span className="font-black text-slate-700 uppercase">{effectiveYear}</span>}
-                         </div>
-                         <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Кузов</span><span className="font-black text-slate-700 uppercase">{order.car?.bodyType || '-'}</span></div>
-                      </div>
-                  </div>
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+             {/* HEADER WITH SORTING - Matches GRID_LAYOUT_CLASS */}
+             <div className={`${GRID_LAYOUT_CLASS} bg-slate-50 text-[9px] font-black text-slate-400 uppercase tracking-wider select-none`}>
+                 <div className="cursor-pointer flex items-center group" onClick={() => handleSort('id')}>ID <SortIcon column="id"/></div>
+                 <div className="cursor-pointer flex items-center group" onClick={() => handleSort('client')}>Марка <SortIcon column="client"/></div> 
+                 <div className="cursor-pointer flex items-center group" onClick={() => handleSort('client')}>Модель</div>
+                 <div className="cursor-pointer flex items-center group" onClick={() => handleSort('year')}>Год <SortIcon column="year"/></div>
+                 <div>VIN</div>
+                 <div className="cursor-pointer flex items-center group" onClick={() => handleSort('client')}>Клиент</div>
+                 {/* DYNAMIC HEADER LABEL: OFFERS OR STATUS */}
+                 <div className="cursor-pointer flex items-center group" onClick={() => handleSort(activeTab === 'open' ? 'offers' : 'status')}>
+                     {activeTab === 'open' ? 'ОФФЕРЫ' : 'СТАТУС'} <SortIcon column={activeTab === 'open' ? 'offers' : 'status'}/>
+                 </div>
+                 <div className="cursor-pointer flex items-center justify-end group" onClick={() => handleSort('date')}>Дата <SortIcon column="date"/></div>
+                 <div></div> {/* Placeholder for Chevron */}
+             </div>
 
-                  <div className="space-y-3">
-                     {currentData.items.map((item: any, idx: number) => {
-                        const effectiveItemName = isEditing ? item.name : (item.AdminName || item.name);
-                        const originalName = order.items[idx]?.name || item.name;
-                        const targetItemName = originalName.trim().toLowerCase();
-                        
-                        const detailOffers = (order.offers || []).flatMap(off => off.items.filter(i => i.name.trim().toLowerCase() === targetItemName).map(i => ({ ...i, sellerName: off.clientName, offerId: off.id })));
-                        
-                        const noStockOffers = detailOffers.filter(o => (o.offeredQuantity || 0) === 0);
-                        const validOffers = detailOffers.filter(o => (o.offeredQuantity || 0) > 0);
-                        const hasNoValidOffers = validOffers.length === 0;
+             {paginatedOrders.map(order => {
+                 const isExpanded = expandedId === order.id;
+                 const isEditing = editingOrderId === order.id;
+                 const offersCount = order.offers ? order.offers.length : 0;
+                 const hasOffers = offersCount > 0;
+                 
+                 // Parsing Car Data
+                 const carBrand = (order.car?.AdminModel || order.car?.model || '').split(' ')[0];
+                 const carModel = (order.car?.AdminModel || order.car?.model || '').split(' ').slice(1).join(' ');
+                 const carYear = order.car?.AdminYear || order.car?.year;
 
-                        return (
-                          <div key={idx} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                             <div className={`px-4 py-2 flex justify-between items-center ${isEditing ? 'bg-blue-50 border-b border-blue-200' : 'bg-slate-900 text-white'}`}>
-                                 {isEditing ? (
-                                     <div className="flex gap-2 w-full">
-                                         <input value={item.name} onChange={e => { const newItems = [...editForm.items]; newItems[idx].name = e.target.value; setEditForm({...editForm, items: newItems}); }} className="bg-transparent border-b border-blue-300 outline-none w-2/3 text-[10px] font-black uppercase text-blue-900" />
-                                         <input type="number" value={item.quantity} onChange={e => { const newItems = [...editForm.items]; newItems[idx].quantity = parseInt(e.target.value); setEditForm({...editForm, items: newItems}); }} className="bg-transparent border-b border-blue-300 outline-none w-1/6 text-[10px] font-black uppercase text-blue-900 text-center" />
-                                     </div>
-                                 ) : (
-                                     <span className={`text-[9px] font-black uppercase ${hasNoValidOffers && detailOffers.length > 0 ? 'line-through text-red-300' : ''}`}>{effectiveItemName} ({item.AdminQuantity || item.quantity} шт)</span>
-                                 )}
-                             </div>
+                 return (
+                 <React.Fragment key={order.id}>
+                     {/* ROW - Matches GRID_LAYOUT_CLASS */}
+                     <div className={`${GRID_LAYOUT_CLASS} hover:bg-slate-50 transition-colors cursor-pointer text-[10px] ${expandedId === order.id ? 'bg-indigo-50/30' : ''}`} onClick={() => !isEditing && setExpandedId(expandedId === order.id ? null : order.id)}>
+                         <div className="font-mono font-bold text-slate-700">{order.id}</div>
+                         <div className="font-bold text-slate-900 uppercase truncate">{carBrand}</div>
+                         <div className="font-bold text-slate-700 uppercase truncate">{carModel}</div>
+                         <div className="font-bold text-slate-500">{carYear}</div>
+                         <div className="font-mono text-slate-500 truncate">{order.vin}</div>
+                         <div className="font-bold text-slate-500 uppercase truncate">{order.clientName}</div>
+                         
+                         {/* OFFERS / STATUS BADGE */}
+                         <div>
+                             {order.isRefused ? (
+                                <span className="inline-flex px-2 py-1 rounded bg-red-100 text-red-600 font-black uppercase text-[8px] whitespace-nowrap">АННУЛИРОВАН</span>
+                             ) : order.readyToBuy ? (
+                                <span className="inline-flex px-2 py-1 rounded bg-emerald-600 text-white font-black uppercase text-[8px] whitespace-nowrap">КУПЛЕНО</span>
+                             ) : (
+                                <span className={`inline-flex px-2 py-1 rounded font-black uppercase text-[8px] whitespace-nowrap ${hasOffers ? 'bg-emerald-100 text-emerald-700' : 'bg-red-50 text-red-400'}`}>
+                                    {offersCount} ОФФЕРОВ
+                                </span>
+                             )}
+                         </div>
+
+                         <div className="text-right font-bold text-slate-400">{order.createdAt.split(/[\n,]/)[0]}</div>
+                         <div className="flex justify-end"><ChevronRight size={16} className={`text-slate-400 transition-transform ${expandedId === order.id ? 'rotate-90' : ''}`}/></div>
+                     </div>
+                     
+                     {isExpanded && (
+                         <div className="p-6 bg-slate-50 border-b border-slate-200">
                              
-                             <div className="divide-y divide-slate-100">
-                                {validOffers.map((off, oIdx) => {
-                                  const isLeader = off.rank === 'ЛИДЕР';
-                                  const inputKey = `${order.id}-${off.offerId}-${originalName}`;
-                                  const currentInput = adminInputs[inputKey];
-                                  const valPrice = currentInput?.price ?? off.adminPrice ?? off.sellerPrice ?? 0;
-                                  const valCurrency = currentInput?.currency ?? off.adminCurrency ?? off.sellerCurrency ?? 'RUB';
-
-                                  return (
-                                    <div key={oIdx} className={`p-3 grid grid-cols-[1fr_100px_70px_100px] gap-4 items-center ${isLeader ? 'bg-emerald-50/30' : ''}`}>
-                                       <div className="flex items-center gap-4 min-w-0">
-                                          <div className="flex flex-col truncate"><span className="text-[10px] font-black uppercase truncate">{off.sellerName}</span><span className="text-[9px] text-slate-500">Закуп: {off.sellerPrice} {off.sellerCurrency} | Кол-во: {off.offeredQuantity}</span></div>
-                                       </div>
-                                       <div className="flex items-center bg-white border border-slate-200 rounded-lg h-8 px-2 shadow-sm focus-within:ring-1 focus-within:ring-indigo-200">
-                                          <input type="text" value={valPrice || ''} onChange={e => { const digits = e.target.value.replace(/\D/g, ''); let v = parseInt(digits) || 0; setAdminInputs(prev => ({...prev, [inputKey]: {...(prev[inputKey] || {currency: valCurrency}), price: v}})); }} className="w-full text-center text-[10px] font-bold bg-transparent outline-none placeholder:text-slate-300" placeholder="0" />
-                                       </div>
-                                       <div className="flex items-center bg-white border border-slate-200 rounded-lg h-8 px-1 shadow-sm">
-                                          <select value={valCurrency} onChange={e => setAdminInputs(prev => ({...prev, [inputKey]: {...(prev[inputKey] || {price: valPrice}), currency: e.target.value as Currency}}))} className="w-full text-[10px] font-bold bg-transparent outline-none cursor-pointer text-center"><option value="RUB">RUB</option><option value="USD">USD</option><option value="CNY">CNY</option></select>
-                                       </div>
-                                       <div className="flex justify-end">
-                                          {!order.isRefused && (
-                                              <button type="button" onClick={() => handleUpdateRank(order.vin, originalName, off.offerId, order.id, off.sellerName, valPrice, valCurrency, isLeader)} className={`w-full h-8 rounded-lg text-[9px] font-black uppercase shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1 ${isLeader ? 'bg-emerald-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}`}>
-                                                  {isLeader ? <><CheckCircle2 size={12}/> Лидер</> : 'Выбрать'}
-                                              </button>
-                                          )}
-                                       </div>
+                             {/* DETAILS HEADER */}
+                             <div className="bg-white p-4 rounded-xl border border-slate-200 mb-6 shadow-sm">
+                                <div className="flex items-center gap-2 mb-3">
+                                    <FileText size={14} className="text-slate-400"/>
+                                    <span className="text-[10px] font-black uppercase text-slate-500">Детали заказа</span>
+                                </div>
+                                
+                                {isEditing ? (
+                                    <div className="grid grid-cols-6 gap-4">
+                                        <div className="col-span-1 space-y-1"><label className="text-[8px] font-bold text-slate-400 uppercase">Марка/Модель</label><input value={editForm['car_model']} onChange={e => setEditForm({...editForm, 'car_model': e.target.value})} className="w-full p-2 border rounded text-xs font-bold uppercase"/></div>
+                                        <div className="col-span-1 space-y-1"><label className="text-[8px] font-bold text-slate-400 uppercase">Год</label><input value={editForm['car_year']} onChange={e => setEditForm({...editForm, 'car_year': e.target.value})} className="w-full p-2 border rounded text-xs font-bold"/></div>
+                                        <div className="col-span-1 space-y-1"><label className="text-[8px] font-bold text-slate-400 uppercase">Кузов</label><input value={editForm['car_body']} onChange={e => setEditForm({...editForm, 'car_body': e.target.value})} className="w-full p-2 border rounded text-xs font-bold uppercase"/></div>
                                     </div>
-                                  );
-                                })}
-
-                                {noStockOffers.length > 0 && (
-                                    <div className="p-3 bg-red-50/30 text-[9px] font-bold text-red-400">
-                                        <span className="uppercase">Нет в наличии:</span> {noStockOffers.map(o => o.sellerName).join(', ')}
+                                ) : (
+                                    <div className="grid grid-cols-7 gap-6 text-[10px]">
+                                        <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-1">Клиент</span><span className="font-black text-indigo-600 uppercase text-sm">{order.clientName}</span></div>
+                                        <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-1">Телефон</span><span className="font-bold text-slate-700">{order.clientPhone || "-"}</span></div>
+                                        <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-1">VIN</span><span className="font-mono font-bold text-slate-600">{order.vin}</span></div>
+                                        <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-1">Модель</span><span className="font-black text-slate-800 uppercase">{order.car?.AdminModel || order.car?.model}</span></div>
+                                        <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-1">Марка</span><span className="font-bold text-slate-700 uppercase">{carBrand}</span></div>
+                                        <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-1">Год</span><span className="font-bold text-slate-700">{order.car?.AdminYear || order.car?.year}</span></div>
+                                        <div><span className="block text-[8px] font-bold text-slate-400 uppercase mb-1">Кузов</span><span className="font-bold text-slate-700 uppercase">{order.car?.AdminBodyType || order.car?.bodyType || '-'}</span></div>
                                     </div>
                                 )}
-
-                                {detailOffers.length === 0 && <div className="p-3 text-center text-[9px] text-slate-400 italic">Нет предложений по этой позиции</div>}
                              </div>
-                          </div>
-                        );
-                     })}
-                  </div>
-                  
-                  {!order.isRefused && (
-                      <div className="flex justify-end items-center pt-4 border-t border-slate-100 gap-4 mt-2 relative z-50">
-                          {isEditing ? (
-                              <div className="flex gap-2 w-full justify-end animate-in fade-in slide-in-from-left-4 duration-300">
-                                 <button type="button" onClick={cancelEditing} disabled={!!isSubmitting} className="flex items-center gap-1.5 px-6 py-2.5 bg-slate-100 text-slate-500 rounded-xl hover:bg-slate-200 font-bold uppercase text-[10px] border border-slate-200 transition-all">
-                                     <X size={14}/> Отмена
-                                 </button>
-                                 <button type="button" onClick={saveChanges} disabled={!!isSubmitting} className="flex items-center gap-1.5 px-6 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-black uppercase text-[10px] shadow-lg shadow-blue-200 active:scale-95 transition-all min-w-[120px] justify-center">
-                                     {isSubmitting === order.id ? <Loader2 size={14} className="animate-spin"/> : <><Save size={14}/> Сохранить</>}
-                                 </button>
-                              </div>
-                          ) : (
-                              <>
-                                  <div className="flex gap-2">
-                                     <button type="button" onClick={(e) => startEditing(e, order)} className="flex items-center gap-1 px-3 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-bold uppercase text-[9px] border border-blue-200 transition-all">
-                                         <Edit3 size={12}/> Изменить
-                                     </button>
-                                     <button type="button" onClick={(e) => handleAnnulOrder(e, order.id)} disabled={!!isProcessingAction} className="flex items-center gap-1 px-3 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 font-bold uppercase text-[9px] border border-red-200 transition-all disabled:opacity-50 min-w-[100px] justify-center">
-                                         {isProcessingAction ? <Loader2 size={12} className="animate-spin"/> : <><Ban size={12}/> Аннулировать</>}
-                                     </button>
-                                  </div>
-                                  
-                                  <div className="w-[1px] h-8 bg-slate-200"></div>
 
-                                  <button type="button" onClick={(e) => handleFormCP(e, order)} disabled={!!isProcessingAction || !hasAnyValidOffer} className="px-8 py-2.5 bg-slate-900 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-slate-800 transition-all shadow-lg active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed min-w-[140px] flex justify-center">
-                                      {isProcessingAction ? <Loader2 size={14} className="animate-spin"/> : 'Утвердить КП'}
-                                  </button>
-                              </>
-                          )}
-                      </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-        <Pagination totalItems={filteredOrders.length} itemsPerPage={itemsPerPage} currentPage={currentPage} onPageChange={setCurrentPage} onItemsPerPageChange={setItemsPerPage} />
+                             {/* ITEMS & OFFERS LIST */}
+                             <div className="space-y-4">
+                                 {order.items.map((item, idx) => {
+                                     // Find offers for this item
+                                     const itemOffers: { offerId: string, clientName: string, item: OrderItem }[] = [];
+                                     order.offers?.forEach(off => {
+                                         const matchingItem = off.items.find(i => i.name === item.name);
+                                         if (matchingItem && (matchingItem.offeredQuantity || 0) > 0) {
+                                             itemOffers.push({
+                                                 offerId: off.id,
+                                                 clientName: off.clientName,
+                                                 item: matchingItem
+                                             });
+                                         }
+                                     });
+
+                                     return (
+                                         <div key={idx} className="bg-slate-900 rounded-xl overflow-hidden shadow-md">
+                                             {/* ITEM HEADER */}
+                                             <div className="p-3 flex items-center justify-between text-white border-b border-slate-700">
+                                                 <div className="flex items-center gap-3">
+                                                     {isEditing ? (
+                                                         <div className="flex gap-2">
+                                                             <input value={editForm[`item_${idx}_name`]} onChange={e => setEditForm({...editForm, [`item_${idx}_name`]: e.target.value})} className="bg-slate-800 text-white px-2 py-1 rounded border border-slate-600 text-xs font-bold uppercase w-64"/>
+                                                             <input type="number" value={editForm[`item_${idx}_qty`]} onChange={e => setEditForm({...editForm, [`item_${idx}_qty`]: e.target.value})} className="bg-slate-800 text-white px-2 py-1 rounded border border-slate-600 text-xs font-bold w-16 text-center"/>
+                                                         </div>
+                                                     ) : (
+                                                         <>
+                                                            <span className="font-black text-[11px] uppercase tracking-wide">{item.AdminName || item.name}</span>
+                                                            <span className="text-[10px] font-bold opacity-60">({item.AdminQuantity || item.quantity} ШТ)</span>
+                                                         </>
+                                                     )}
+                                                 </div>
+                                             </div>
+
+                                             {/* OFFERS FOR THIS ITEM */}
+                                             <div className="bg-white p-2 space-y-1">
+                                                 {itemOffers.length > 0 ? (
+                                                     itemOffers.map((off, oIdx) => {
+                                                         const isLeader = off.item.rank === 'ЛИДЕР' || off.item.rank === 'LEADER';
+                                                         return (
+                                                             <div key={oIdx} className={`grid grid-cols-[200px_1fr_120px_100px_120px] items-center p-3 rounded-lg border ${isLeader ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-100'}`}>
+                                                                 <div className="font-black text-[10px] uppercase text-slate-800">{off.clientName}</div>
+                                                                 <div className="text-[10px] text-slate-500">Закуп: {off.item.sellerPrice} {off.item.sellerCurrency} | Кол-во: {off.item.offeredQuantity}</div>
+                                                                 
+                                                                 {/* ADMIN PRICE INPUT - Styles updated for visibility */}
+                                                                 <input 
+                                                                    type="number" 
+                                                                    placeholder={isLeader ? String(off.item.adminPrice || off.item.sellerPrice) : "0"} 
+                                                                    className="w-full px-2 py-1.5 border border-slate-200 rounded text-center text-[10px] font-bold outline-none focus:border-indigo-500 bg-white text-slate-900"
+                                                                    onChange={(e) => {
+                                                                        // Store temp value logic if needed, currently direct update via button
+                                                                        off.item.adminPrice = Number(e.target.value);
+                                                                    }}
+                                                                    defaultValue={off.item.adminPrice || off.item.sellerPrice}
+                                                                 />
+                                                                 
+                                                                 {/* CURRENCY SELECT - Styles updated for visibility */}
+                                                                 <select 
+                                                                    className="mx-2 px-1 py-1.5 border border-slate-200 rounded text-[10px] font-bold outline-none bg-white text-slate-900"
+                                                                    defaultValue={off.item.adminCurrency || off.item.sellerCurrency}
+                                                                    onChange={(e) => off.item.adminCurrency = e.target.value as Currency}
+                                                                 >
+                                                                     <option value="CNY">CNY</option>
+                                                                     <option value="RUB">RUB</option>
+                                                                     <option value="USD">USD</option>
+                                                                 </select>
+
+                                                                 {/* ACTION BUTTON */}
+                                                                 <button 
+                                                                    onClick={() => {
+                                                                        // Use values from inputs (accessed via ref or direct DOM if simpler, here relying on mutation for simplicity or need State)
+                                                                        // Better approach: use state for inputs. For now, assuming inputs update the object reference in memory before click
+                                                                        const priceInput = (document.activeElement?.previousElementSibling?.previousElementSibling as HTMLInputElement)?.value;
+                                                                        const currencyInput = (document.activeElement?.previousElementSibling as HTMLSelectElement)?.value;
+                                                                        
+                                                                        handleUpdateRank(
+                                                                            off.offerId, 
+                                                                            item.name, 
+                                                                            off.item.rank || '', 
+                                                                            order.vin,
+                                                                            off.item.adminPrice, // Pass stored
+                                                                            off.item.adminCurrency
+                                                                        );
+                                                                    }}
+                                                                    className={`w-full py-2 rounded-lg font-black text-[9px] uppercase transition-all ${isLeader ? 'bg-emerald-500 text-white shadow-emerald-200 shadow-md hover:bg-emerald-600' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                                                                 >
+                                                                     {isLeader ? 'ЛИДЕР' : 'ВЫБРАТЬ'}
+                                                                 </button>
+                                                             </div>
+                                                         );
+                                                     })
+                                                 ) : (
+                                                     <div className="p-4 text-center text-[10px] font-bold text-slate-300 uppercase italic">Нет предложений по этой позиции</div>
+                                                 )}
+                                             </div>
+                                         </div>
+                                     );
+                                 })}
+                             </div>
+
+                             {/* FOOTER ACTIONS */}
+                             <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-slate-200">
+                                 {isEditing ? (
+                                     <>
+                                        <button onClick={() => setEditingOrderId(null)} className="px-6 py-3 rounded-xl border border-slate-200 text-slate-500 font-black text-[10px] uppercase hover:bg-slate-50">Отмена</button>
+                                        <button onClick={() => saveEditing(order)} className="px-6 py-3 rounded-xl bg-indigo-600 text-white font-black text-[10px] uppercase shadow-lg hover:bg-indigo-700 flex items-center gap-2">{isSubmitting === order.id ? <Loader2 size={14} className="animate-spin"/> : <Check size={14}/>} Сохранить изменения</button>
+                                     </>
+                                 ) : (
+                                     <>
+                                        {!order.isRefused && !order.readyToBuy && (
+                                            <button onClick={() => startEditing(order)} className="px-4 py-3 rounded-xl border border-indigo-100 text-indigo-600 bg-indigo-50 font-black text-[10px] uppercase hover:bg-indigo-100 flex items-center gap-2"><Edit2 size={14}/> Изменить</button>
+                                        )}
+                                        {!order.isRefused && (
+                                            <button onClick={() => setAdminModal({ type: 'ANNUL', orderId: order.id })} className="px-4 py-3 rounded-xl border border-red-100 text-red-500 bg-red-50 font-black text-[10px] uppercase hover:bg-red-100 flex items-center gap-2"><Ban size={14}/> Аннулировать</button>
+                                        )}
+                                        {!order.isRefused && !order.readyToBuy && (
+                                            <button onClick={() => handleFormCP(order.id)} className="px-8 py-3 rounded-xl bg-slate-900 text-white font-black text-[10px] uppercase shadow-xl hover:bg-slate-800 transition-all active:scale-95">Утвердить КП</button>
+                                        )}
+                                     </>
+                                 )}
+                             </div>
+                         </div>
+                     )}
+                 </React.Fragment>
+             );
+             })}
+             <Pagination totalItems={filteredOrders.length} itemsPerPage={itemsPerPage} currentPage={currentPage} onPageChange={setCurrentPage} onItemsPerPageChange={setItemsPerPage} />
+          </div>
+          
+          {/* MODALS */}
+          {adminModal && (
+              <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                  <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 animate-in zoom-in-95 duration-200">
+                      {adminModal.type === 'VALIDATION' ? (
+                          <div className="text-center space-y-4">
+                              <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto"><AlertCircle size={24}/></div>
+                              <div>
+                                  <h3 className="text-lg font-black uppercase text-slate-800">Внимание!</h3>
+                                  <p className="text-xs font-bold text-slate-500 mt-2">Не выбраны поставщики для позиций:</p>
+                                  <ul className="mt-2 text-[10px] font-bold text-red-500 uppercase bg-red-50 p-2 rounded-lg text-left">
+                                      {adminModal.missingItems?.map(i => <li key={i}>• {i}</li>)}
+                                  </ul>
+                                  <p className="text-[10px] text-slate-400 mt-2">Вы уверены, что хотите утвердить неполное КП?</p>
+                              </div>
+                              <div className="grid grid-cols-2 gap-3">
+                                  <button onClick={() => setAdminModal(null)} className="py-3 rounded-xl bg-slate-100 text-slate-600 font-bold text-xs uppercase hover:bg-slate-200">Отмена</button>
+                                  <button onClick={() => executeApproval(adminModal.orderId!)} className="py-3 rounded-xl bg-indigo-600 text-white font-black text-xs uppercase hover:bg-indigo-700 shadow-lg shadow-indigo-200">Всё равно утвердить</button>
+                              </div>
+                          </div>
+                      ) : (
+                          <div className="space-y-4">
+                              <h3 className="text-lg font-black uppercase text-slate-800">Аннулирование заказа</h3>
+                              <p className="text-xs text-slate-500 font-bold">Укажите причину отказа. Это сообщение увидит клиент.</p>
+                              <textarea 
+                                  value={refusalReason}
+                                  onChange={e => setRefusalReason(e.target.value)}
+                                  className="w-full h-24 p-3 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-indigo-500 bg-slate-50 uppercase placeholder:normal-case"
+                                  placeholder="Причина..."
+                              />
+                              <div className="flex gap-2 justify-end">
+                                  <button onClick={() => setAdminModal(null)} className="px-4 py-2 text-xs font-bold text-slate-500 uppercase hover:bg-slate-100 rounded-lg">Отмена</button>
+                                  <button onClick={handleRefuse} className="px-4 py-2 text-xs font-bold text-white bg-red-600 uppercase rounded-lg hover:bg-red-700 shadow-lg shadow-red-200">Подтвердить</button>
+                              </div>
+                          </div>
+                      )}
+                  </div>
+              </div>
+          )}
       </div>
-    </div>
   );
 };
