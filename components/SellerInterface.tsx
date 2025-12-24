@@ -5,7 +5,7 @@ import { Order, OrderStatus, Currency, RowType } from '../types';
 import { Pagination } from './Pagination';
 import { 
   User, CheckCircle, Search, RefreshCw, Edit2, LogOut, ShieldCheck, AlertCircle,
-  BarChart3, Calendar, TrendingUp, Clock, Car, ChevronDown, ChevronRight, Loader2, CheckCircle2, UserCircle2, AlertTriangle, XCircle
+  BarChart3, Calendar, TrendingUp, Clock, Car, ChevronDown, ChevronRight, Loader2, CheckCircle2, UserCircle2, AlertTriangle, XCircle, FileText, Ban
 } from 'lucide-react';
 
 export const SellerInterface: React.FC = () => {
@@ -74,52 +74,35 @@ export const SellerInterface: React.FC = () => {
     if (!myOffer) return { label: 'Ожидание', color: 'bg-slate-100 text-slate-500', icon: <Clock size={10}/> };
 
     if (!order.isProcessed) {
-        return { label: 'На проверке админом', color: 'bg-blue-50 text-blue-600 border-blue-100', icon: <Loader2 size={10} className="animate-spin"/> };
+        return { label: 'На проверке', color: 'bg-blue-50 text-blue-600 border-blue-100', icon: <Loader2 size={10} className="animate-spin"/> };
     }
 
     const winningItems = myOffer.items.filter(i => i.rank === 'ЛИДЕР' || i.rank === 'LEADER');
     const totalItems = myOffer.items.length;
 
     if (winningItems.length === totalItems) {
-        return { label: 'Заявка выиграла', color: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: <CheckCircle2 size={10}/> };
+        return { label: 'ВЫИГРАЛ', color: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: <CheckCircle2 size={10}/> };
     } else if (winningItems.length === 0) {
-        return { label: 'Заявка проиграла', color: 'bg-red-50 text-red-600 border-red-100', icon: <XCircle size={10}/> };
+        return { label: 'ПРОИГРАЛ', color: 'bg-red-50 text-red-600 border-red-100', icon: <XCircle size={10}/> };
     } else {
-        return { label: 'Частично выиграла', color: 'bg-amber-100 text-amber-700 border-amber-200', icon: <AlertTriangle size={10}/> };
+        return { label: 'ЧАСТИЧНО', color: 'bg-amber-100 text-amber-700 border-amber-200', icon: <AlertTriangle size={10}/> };
     }
   };
 
-  /**
-   * Робастный парсер даты. Поддерживает форматы:
-   * - 23.12.2025
-   * - 2025-12-23
-   * - Строки с переносами из Google Sheets
-   */
   const parseRuDate = (dateStr: any): Date => {
     if (!dateStr) return new Date(0);
     if (dateStr instanceof Date) return dateStr;
-    
-    // Исправлено: замена некорректного регулярного выражения \n/r/g на корректное /[\n\r]/g
     const s = String(dateStr).trim().replace(/[\n\r]/g, ' ');
-    
-    // 1. Попытка нативного парсинга
     const nativeDate = new Date(s);
     if (!isNaN(nativeDate.getTime())) return nativeDate;
-
-    // 2. Поиск формата DD.MM.YYYY через RegExp
     const match = s.match(/(\d{2})\.(\d{2})\.(\d{4})/);
-    if (match) {
-      return new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]));
-    }
-
+    if (match) return new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]));
     return new Date(0);
   };
 
   const marketStats = useMemo(() => {
     const allOrders = rawOrders.filter(o => o.type === RowType.ORDER);
     const now = new Date();
-    
-    // Точные границы времени
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
     
@@ -131,8 +114,6 @@ export const SellerInterface: React.FC = () => {
 
     allOrders.forEach(o => {
       const d = parseRuDate(o.createdAt).getTime();
-      
-      // Логика: дата должна быть внутри диапазона и НЕ в будущем относительно текущего конца дня
       if (d >= startOfToday && d <= endOfToday) today++;
       if (d >= startOfWeek && d <= endOfToday) week++;
       if (d >= startOfMonth && d <= endOfToday) month++;
@@ -189,6 +170,20 @@ export const SellerInterface: React.FC = () => {
 
   const handleSubmitOffer = async (order: Order) => {
     if (order.isProcessed || !sellerName) return;
+
+    // Check partial quantity
+    let hasPartial = false;
+    order.items.forEach(item => {
+        const stateKey = `${order.id}-${item.name}`;
+        const state = editingItems[stateKey];
+        const offeredQty = state ? state.offeredQty : item.quantity;
+        if (offeredQty < item.quantity) hasPartial = true;
+    });
+
+    if (hasPartial) {
+        const confirmPartial = window.confirm("Вы предлагаете неполное количество (или отказали) по одной или нескольким позициям. Отправить предложение?");
+        if (!confirmPartial) return;
+    }
     
     setVanishingIds(prev => new Set(prev).add(order.id));
     setSuccessToast({ message: `Предложение к заказу ${order.id} отправлено`, id: Date.now().toString() });
@@ -270,10 +265,10 @@ export const SellerInterface: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard icon={<Clock size={16} className="text-indigo-600"/>} label="СЕГОДНЯ" value={marketStats.today} subLabel="ОРДЕРОВ" loading={loading} />
-          <StatCard icon={<Calendar size={16} className="text-indigo-600"/>} label="НЕДЕЛЯ" value={marketStats.week} subLabel="ОРДЕРОВ" loading={loading} />
-          <StatCard icon={<TrendingUp size={16} className="text-indigo-600"/>} label="МЕСЯЦ" value={marketStats.month} subLabel="ОРДЕРОВ" loading={loading} />
-          <StatCard icon={<ShieldCheck size={16} className="text-indigo-600"/>} label="ВСЕГО" value={marketStats.total} subLabel="В БАЗЕ" loading={loading} />
+          <StatCard icon={<Clock size={16} className="text-indigo-600"/>} label="СЕГОДНЯ" value={marketStats.today} subLabel="ЗАКАЗОВ" loading={loading} />
+          <StatCard icon={<Calendar size={16} className="text-indigo-600"/>} label="НЕДЕЛЯ" value={marketStats.week} subLabel="ЗАКАЗОВ" loading={loading} />
+          <StatCard icon={<TrendingUp size={16} className="text-indigo-600"/>} label="МЕСЯЦ" value={marketStats.month} subLabel="ЗАКАЗОВ" loading={loading} />
+          <StatCard icon={<ShieldCheck size={16} className="text-indigo-600"/>} label="ВСЕГО" value={marketStats.total} subLabel="ЗАКАЗОВ" loading={loading} />
           
           <div className="col-span-full bg-slate-900 rounded-2xl p-4 flex items-center justify-between border border-slate-800 shadow-xl overflow-hidden relative min-h-[80px]">
               <div className="z-10">
@@ -307,6 +302,19 @@ export const SellerInterface: React.FC = () => {
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="p-4 border-b border-slate-50 relative group hidden md:block">
+            {/* DESKTOP HEADER ROW */}
+            <div className="grid grid-cols-[70px_100px_1.5fr_60px_80px_140px_20px] gap-4 px-3 text-[9px] font-black uppercase text-slate-400 tracking-wider">
+               <div>ORD</div>
+               <div>Марка</div>
+               <div>Модель</div>
+               <div>Год</div>
+               <div className="text-right">Дата</div>
+               <div className="text-right">Статус</div>
+               <div></div>
+            </div>
+        </div>
+
         {filteredOrders.length === 0 && <div className="p-12 text-center text-[10px] font-black text-slate-300 uppercase italic tracking-widest">Список пуст</div>}
         {paginatedOrders.map(order => {
           const isExpanded = expandedId === order.id;
@@ -314,25 +322,96 @@ export const SellerInterface: React.FC = () => {
           const isVanishing = vanishingIds.has(order.id);
           const myOffer = getMyOffer(order);
           const isDisabled = order.isProcessed === true;
+          
+          // Helper to split Brand/Model
+          const fullModel = order.car?.model || 'N/A';
+          const brandPart = fullModel.split(' ')[0] || '-';
+          const modelPart = fullModel.split(' ').slice(1).join(' ') || '-';
 
           const containerStyle = isVanishing ? "opacity-0 scale-95 h-0 overflow-hidden" : isExpanded ? "border-l-indigo-600 ring-1 ring-indigo-600 shadow-xl bg-white relative z-10 rounded-xl my-3" : "hover:bg-slate-50 border-l-transparent border-b border-slate-100 last:border-0";
 
           return (
             <div key={order.id} className={`transition-all duration-500 border-l-4 ${containerStyle}`}>
-              <div onClick={() => !isVanishing && setExpandedId(isExpanded ? null : order.id)} className="p-3 cursor-pointer select-none flex items-center gap-4 text-[10px]">
-                  <div className="font-mono font-bold w-20 truncate">{order.id}</div>
-                  <div className="font-black uppercase flex-grow truncate">{order.car?.model || 'N/A'} <span className="font-bold ml-1 text-slate-400">{order.car?.year}</span></div>
-                  <div className="font-bold w-24 text-right text-slate-400">{order.createdAt.split(/[\n,]/)[0]}</div>
-                  <div className="w-40 flex justify-end">
+              {/* ROW CONTENT */}
+              <div onClick={() => !isVanishing && setExpandedId(isExpanded ? null : order.id)} className="p-3 cursor-pointer select-none grid grid-cols-1 md:grid-cols-[70px_100px_1.5fr_60px_80px_140px_20px] gap-3 md:gap-4 items-center text-[10px]">
+                  
+                  {/* ID */}
+                  <div className="font-mono font-bold truncate flex items-center gap-2">
+                     <span className="md:hidden text-slate-400 w-12">ID:</span>
+                     {order.id}
+                  </div>
+
+                  {/* BRAND */}
+                  <div className="font-black uppercase truncate text-slate-800 flex items-center gap-2">
+                     <span className="md:hidden text-slate-400 w-12">Марка:</span>
+                     {brandPart}
+                  </div>
+
+                  {/* MODEL */}
+                  <div className="font-black uppercase truncate text-slate-600 flex items-center gap-2">
+                     <span className="md:hidden text-slate-400 w-12">Модель:</span>
+                     {modelPart}
+                  </div>
+
+                  {/* YEAR */}
+                  <div className="font-bold text-slate-500 flex items-center gap-2">
+                     <span className="md:hidden text-slate-400 w-12">Год:</span>
+                     {order.car?.year}
+                  </div>
+
+                  {/* DATE */}
+                  <div className="font-bold text-slate-400 md:text-right flex items-center md:justify-end gap-1">
+                     <span className="md:hidden text-slate-400 mr-2">Дата:</span>
+                     {order.createdAt.split(/[\n,]/)[0]}
+                  </div>
+
+                  {/* STATUS */}
+                  <div className="flex justify-end">
                     <div className={`px-2 py-1 rounded-md font-black text-[8px] uppercase border flex items-center gap-1.5 shadow-sm ${statusInfo.color}`}>
                         {statusInfo.icon}
                         {statusInfo.label}
                     </div>
                   </div>
+
+                  {/* CHEVRON */}
+                  <div className="flex justify-end items-center">
+                    <ChevronRight size={14} className={`text-slate-300 transition-transform ${isExpanded ? 'rotate-90 text-indigo-600' : ''}`}/>
+                  </div>
               </div>
 
               {isExpanded && !isVanishing && (
                 <div className="p-4 bg-white border-t border-slate-100 animate-in fade-in duration-200" onClick={e => e.stopPropagation()}>
+                  
+                  {/* DETAILED CAR INFO BLOCK */}
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-4 text-[10px] shadow-sm">
+                      <div className="flex items-center gap-2 mb-3">
+                         <FileText size={12} className="text-slate-400"/> 
+                         <span className="font-black uppercase text-slate-500">Характеристики автомобиля</span>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+                         <div>
+                            <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">VIN</span>
+                            <span className="font-mono font-black text-slate-800 bg-white px-2 py-1 rounded border border-slate-200 inline-block">{order.vin}</span>
+                         </div>
+                         <div>
+                            <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Марка</span>
+                            <span className="font-black text-slate-700 uppercase">{brandPart}</span>
+                         </div>
+                         <div>
+                            <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Модель</span>
+                            <span className="font-black text-slate-700 uppercase">{modelPart}</span>
+                         </div>
+                         <div>
+                            <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Кузов</span>
+                            <span className="font-black text-slate-700 uppercase">{order.car?.bodyType || '-'}</span>
+                         </div>
+                         <div>
+                            <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Год</span>
+                            <span className="font-black text-slate-700 uppercase">{order.car?.year || '-'}</span>
+                         </div>
+                      </div>
+                  </div>
+
                   <div className="space-y-3">
                       {order.items.map(item => {
                         const stateKey = `${order.id}-${item.name}`;
@@ -345,23 +424,41 @@ export const SellerInterface: React.FC = () => {
                         };
                         
                         const isWinner = offerItem?.rank === 'ЛИДЕР' || offerItem?.rank === 'LEADER';
-                        const isPartialWin = statusInfo.label === 'Частично выиграла';
+                        const isPartialWin = statusInfo.label === 'ЧАСТИЧНО';
+                        const isPriceEmpty = !isDisabled && !myOffer && state.price === 0;
+                        const isQtyDeficit = state.offeredQty < item.quantity;
+                        const isUnavailable = state.offeredQty === 0;
 
                         const handleNumInput = (raw: string, field: 'price' | 'offeredQty', max?: number) => {
                             if (isDisabled || !!myOffer) return;
                             const digits = raw.replace(/\D/g, '');
                             let val = parseInt(digits) || 0;
                             if (max && val > max) val = max;
+                            // Limit price to 1,000,000
+                            if (field === 'price' && val > 1000000) val = 0; 
+
                             setEditingItems(prev => ({ ...prev, [stateKey]: { ...(prev[stateKey] || state), [field]: val } }));
                         };
 
+                        const toggleUnavailable = () => {
+                           if (isDisabled || !!myOffer) return;
+                           // If currently 0, restore to full qty. If not 0, set to 0.
+                           const newVal = state.offeredQty === 0 ? item.quantity : 0;
+                           setEditingItems(prev => ({ ...prev, [stateKey]: { ...(prev[stateKey] || state), offeredQty: newVal } }));
+                        };
+
                         return (
-                          <div key={item.name} className={`flex flex-col md:flex-row gap-4 items-center border rounded-xl p-3 transition-all ${isWinner ? 'bg-emerald-50 border-emerald-200 ring-1 ring-emerald-100' : 'border-slate-100 bg-slate-50/30'}`}>
+                          <div key={item.name} className={`flex flex-col md:flex-row gap-4 items-center border rounded-xl p-3 transition-all ${isWinner ? 'bg-emerald-50 border-emerald-200 ring-1 ring-emerald-100' : 'bg-slate-50/30'} ${isPriceEmpty ? 'border-red-300 bg-red-50/10' : 'border-slate-100'}`}>
                              <div className="flex-grow w-full">
-                                <div className="flex items-center gap-2 mb-1">
-                                    <h4 className="font-black text-[11px] uppercase text-slate-900">{item.name}</h4>
+                                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                    <h4 className={`font-black text-[11px] uppercase transition-all ${isUnavailable ? 'line-through text-red-400' : 'text-slate-900'}`}>{item.name}</h4>
                                     {isWinner && <span className="bg-emerald-600 text-white px-1.5 py-0.5 rounded text-[7px] font-black uppercase">Выбрано</span>}
                                     {isDisabled && !isWinner && isPartialWin && <span className="bg-slate-200 text-slate-500 px-1.5 py-0.5 rounded text-[7px] font-black uppercase">В резерве</span>}
+                                    
+                                    {/* STATUS TAGS */}
+                                    {!isUnavailable && isQtyDeficit && <span className="bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded text-[7px] font-black uppercase flex items-center gap-1"><AlertTriangle size={8}/> Дефицит</span>}
+                                    {!isUnavailable && isPriceEmpty && <span className="bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded text-[7px] font-black uppercase flex items-center gap-1 animate-pulse"><AlertCircle size={8}/> Укажите цену</span>}
+                                    {isUnavailable && <span className="bg-red-100 text-red-600 px-1.5 py-0.5 rounded text-[7px] font-black uppercase flex items-center gap-1">Нет в наличии</span>}
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <span className="text-[8px] font-bold text-slate-400 uppercase">{item.category}</span>
@@ -370,17 +467,28 @@ export const SellerInterface: React.FC = () => {
                              </div>
 
                              <div className="flex flex-wrap md:flex-nowrap items-end gap-2 shrink-0">
-                                <div className="w-16 space-y-1">
-                                    <label className="text-[7px] font-bold text-slate-400 uppercase block text-center">Кол-во</label>
-                                    <input type="text" disabled={isDisabled || !!myOffer} value={state.offeredQty || ''} onChange={e => handleNumInput(e.target.value, 'offeredQty', item.quantity)} className="w-full text-center font-bold text-[10px] border border-slate-200 rounded-lg py-1.5 bg-white disabled:bg-slate-50 disabled:text-slate-400" placeholder="0" />
+                                <div className="w-24 flex items-end gap-2">
+                                    <button 
+                                        onClick={toggleUnavailable} 
+                                        disabled={isDisabled || !!myOffer}
+                                        className={`mb-[1px] p-1.5 rounded-lg border transition-all ${isUnavailable ? 'bg-red-50 border-red-200 text-red-500' : 'bg-white border-slate-200 text-slate-400 hover:text-red-500 hover:border-red-200'}`}
+                                        title={isUnavailable ? "Вернуть позицию" : "Нет позиции"}
+                                    >
+                                        <Ban size={14} />
+                                    </button>
+                                    <div className="space-y-1 flex-grow">
+                                        <label className="text-[7px] font-bold text-slate-400 uppercase block text-center">Кол-во</label>
+                                        <input type="text" disabled={isDisabled || !!myOffer} value={state.offeredQty || 0} onChange={e => handleNumInput(e.target.value, 'offeredQty', item.quantity)} className={`w-full text-center font-bold text-[10px] border rounded-lg py-1.5 bg-white disabled:bg-slate-50 disabled:text-slate-400 outline-none focus:border-indigo-500 ${isQtyDeficit && !isUnavailable ? 'text-amber-600 border-amber-200' : 'border-slate-200'}`} placeholder="0" />
+                                    </div>
                                 </div>
+
                                 <div className="w-24 space-y-1">
                                     <label className="text-[7px] font-bold text-slate-400 uppercase block text-center">Цена</label>
-                                    <input type="text" disabled={isDisabled || !!myOffer} value={state.price || ''} onChange={e => handleNumInput(e.target.value, 'price')} className="w-full text-center font-bold text-[10px] border border-slate-200 rounded-lg py-1.5 bg-white disabled:bg-slate-50 disabled:text-slate-400" placeholder="0" />
+                                    <input type="text" disabled={isDisabled || !!myOffer || isUnavailable} value={isUnavailable ? 0 : state.price || ''} onChange={e => handleNumInput(e.target.value, 'price')} className={`w-full text-center font-bold text-[10px] border rounded-lg py-1.5 bg-white disabled:bg-slate-50 disabled:text-slate-400 outline-none focus:border-indigo-500 ${!isUnavailable && isPriceEmpty ? 'border-red-400 bg-red-50 text-red-600 placeholder:text-red-300' : 'border-slate-200'}`} placeholder="0" />
                                 </div>
                                 <div className="w-16 space-y-1">
                                     <label className="text-[7px] font-bold text-slate-400 uppercase block text-center">Валюта</label>
-                                    <select disabled={isDisabled || !!myOffer} value={state.currency} onChange={e => setEditingItems(prev => ({...prev, [stateKey]: {...(prev[stateKey] || state), currency: e.target.value as Currency}}))} className="w-full text-center font-bold text-[10px] border border-slate-200 rounded-lg py-1.5 bg-white disabled:bg-slate-50">
+                                    <select disabled={isDisabled || !!myOffer || isUnavailable} value={state.currency} onChange={e => setEditingItems(prev => ({...prev, [stateKey]: {...(prev[stateKey] || state), currency: e.target.value as Currency}}))} className="w-full text-center font-bold text-[10px] border border-slate-200 rounded-lg py-1.5 bg-white disabled:bg-slate-50 outline-none focus:border-indigo-500">
                                         <option value="RUB">RUB</option>
                                         <option value="USD">USD</option>
                                         <option value="CNY">CNY</option>

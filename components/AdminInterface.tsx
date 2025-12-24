@@ -1,10 +1,11 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { SheetService } from '../services/sheetService';
 import { Order, OrderStatus, Currency } from '../types';
 import { Pagination } from './Pagination';
 import { 
   Search, RefreshCw, ChevronRight, FileText, 
-  ArrowRight, PackageCheck, History, X, User, AlertTriangle, Edit, CheckCircle2, ChevronDown, Calendar, Car, Hash
+  ArrowRight, PackageCheck, History, X, User, AlertTriangle, Edit, CheckCircle2, ChevronDown, Calendar, Car, Hash, Phone
 } from 'lucide-react';
 
 interface ActionLog {
@@ -203,9 +204,11 @@ export const AdminInterface: React.FC = () => {
         </div>
         
         {/* TABLE HEADER - FOR DESKTOP - GRID COLS ADJUSTED FOR VIN */}
-        <div className="hidden md:grid grid-cols-[80px_1.5fr_130px_1fr_110px_90px_20px] gap-4 px-4 py-3 bg-slate-50/80 border-b border-slate-100 text-[9px] font-black uppercase text-slate-400 tracking-wider">
+        <div className="hidden md:grid grid-cols-[80px_100px_1.5fr_60px_130px_1fr_110px_90px_20px] gap-4 px-4 py-3 bg-slate-50/80 border-b border-slate-100 text-[9px] font-black uppercase text-slate-400 tracking-wider">
            <div>ID</div>
-           <div>Автомобиль</div>
+           <div>Марка</div>
+           <div>Модель</div>
+           <div>Год</div>
            <div>VIN</div>
            <div>Клиент</div>
            <div>Офферы</div>
@@ -220,6 +223,11 @@ export const AdminInterface: React.FC = () => {
           const isApproved = approvedIds.has(order.id);
           const isVanishing = vanishingIds.has(order.id);
           const isVisualSuccess = isApproved || isVanishing;
+
+          // Helper to split Brand/Model
+          const fullModel = order.car?.model || 'N/A';
+          const brandPart = fullModel.split(' ')[0];
+          const modelPart = fullModel.split(' ').slice(1).join(' ') || '-';
           
           let containerStyle = isVanishing ? "opacity-0 max-h-0 py-0 overflow-hidden" : isApproved ? "bg-emerald-50 border-emerald-200" : isExpanded ? "border-l-indigo-600 ring-1 ring-indigo-600 shadow-xl bg-white relative z-10 rounded-xl my-3" : "hover:bg-slate-50 border-b border-slate-100 last:border-0";
 
@@ -229,7 +237,7 @@ export const AdminInterface: React.FC = () => {
           return (
             <div key={order.id} className={`transition-all duration-500 border-l-4 ${containerStyle}`}>
               {/* MAIN ROW - GRID LAYOUT UPDATED */}
-              <div onClick={() => !isVisualSuccess && setExpandedTenders(p => ({ ...p, [order.id]: !isExpanded }))} className="p-3 cursor-pointer select-none grid grid-cols-1 md:grid-cols-[80px_1.5fr_130px_1fr_110px_90px_20px] gap-3 md:gap-4 items-center text-[10px]">
+              <div onClick={() => !isVisualSuccess && setExpandedTenders(p => ({ ...p, [order.id]: !isExpanded }))} className="p-3 cursor-pointer select-none grid grid-cols-1 md:grid-cols-[80px_100px_1.5fr_60px_130px_1fr_110px_90px_20px] gap-3 md:gap-4 items-center text-[10px]">
                   
                   {/* ID */}
                   <div className="font-mono font-bold truncate flex items-center gap-2">
@@ -237,10 +245,22 @@ export const AdminInterface: React.FC = () => {
                      {order.id}
                   </div>
 
-                  {/* CAR */}
-                  <div className="font-black uppercase flex flex-col min-w-0">
-                    <span className="truncate flex items-center gap-1"><Car size={10} className="md:hidden inline text-slate-400"/> {order.car?.model || 'N/A'}</span>
-                    <span className="text-slate-400 font-bold truncate text-[9px]">{order.car?.year} {order.car?.bodyType}</span>
+                  {/* BRAND */}
+                  <div className="font-black uppercase truncate text-slate-800 flex items-center gap-2">
+                     <span className="md:hidden text-slate-400 w-12">Марка:</span>
+                     {brandPart}
+                  </div>
+
+                  {/* MODEL */}
+                  <div className="font-black uppercase truncate text-slate-600 flex items-center gap-2">
+                     <span className="md:hidden text-slate-400 w-12">Модель:</span>
+                     {modelPart}
+                  </div>
+
+                  {/* YEAR */}
+                  <div className="font-bold text-slate-500 flex items-center gap-2">
+                     <span className="md:hidden text-slate-400 w-12">Год:</span>
+                     {order.car?.year}
                   </div>
 
                   {/* VIN - NEW COLUMN */}
@@ -276,6 +296,46 @@ export const AdminInterface: React.FC = () => {
 
               {isExpanded && !isVisualSuccess && (
                 <div className="p-5 bg-white border-t border-slate-100 space-y-4 cursor-default" onClick={e => e.stopPropagation()}>
+                  
+                  {/* ADMIN DETAILED INFO BLOCK */}
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-4 text-[10px] shadow-sm">
+                      <div className="flex items-center gap-2 mb-3">
+                         <FileText size={12} className="text-slate-400"/> 
+                         <span className="font-black uppercase text-slate-500">Детали заказа</span>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+                         {/* CLIENT INFO */}
+                         <div className="md:col-span-1 border-r border-slate-200 pr-4">
+                             <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Клиент</span>
+                             <div className="flex flex-col gap-1">
+                                <span className="font-black text-indigo-700 uppercase">{order.clientName}</span>
+                                {/* Note: Phone is not directly in Order object usually, unless stored in clientName or separate field */}
+                             </div>
+                         </div>
+                         {/* CAR INFO */}
+                         <div>
+                            <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">VIN</span>
+                            <span className="font-mono font-black text-slate-800">{order.vin}</span>
+                         </div>
+                         <div>
+                            <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Марка</span>
+                            <span className="font-black text-slate-700 uppercase">{brandPart}</span>
+                         </div>
+                         <div>
+                            <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Модель</span>
+                            <span className="font-black text-slate-700 uppercase">{modelPart}</span>
+                         </div>
+                         <div>
+                            <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Кузов</span>
+                            <span className="font-black text-slate-700 uppercase">{order.car?.bodyType || '-'}</span>
+                         </div>
+                         <div>
+                            <span className="block text-[8px] font-bold text-slate-400 uppercase mb-0.5">Год</span>
+                            <span className="font-black text-slate-700 uppercase">{order.car?.year || '-'}</span>
+                         </div>
+                      </div>
+                  </div>
+
                   <div className="space-y-3">
                      {order.items.map((item, idx) => {
                         const targetItemName = item.name.trim().toLowerCase();
